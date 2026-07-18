@@ -1,0 +1,19 @@
+services:
+  api:
+    build: ./backend
+    environment:
+      DATABASE_URL: sqlite:///./data/bistate.db
+    volumes:
+      - bistate_data:/app/data
+    ports:
+      - "8000:8000"
+
+  web:
+    build: ./frontend
+    depends_on:
+      - api
+    ports:
+      - "5173:80"
+
+volumes:
+  bistate_data:
