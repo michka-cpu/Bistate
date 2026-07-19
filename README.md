@@ -64,3 +64,18 @@ docker compose up --build
 ```
 
 The dashboard is then served on `http://localhost:5173`, and the API on `http://localhost:8000`.
+
+## Underwriting engine
+
+`POST /api/underwriting/calculate` evaluates the Scenario A formulas from the primary
+`Upstate_Airbnb_Wedding_Venue_Underwriting_Model.xlsx` workbook. Send an empty JSON
+object to use the workbook defaults, or override any documented assumption:
+
+```json
+{"purchase_price": 500000, "occupancy": 0.5, "nightly_rate": 425}
+```
+
+The response returns the workbook's acquisition, revenue, operating-cost, financing,
+tax, and dashboard sections. Formula references that are internally inconsistent in
+the workbook are intentionally retained literally: the dashboard uses Revenue Model
+B19, while the worksheet's total-gross-revenue B20 uses B10 and B18.
