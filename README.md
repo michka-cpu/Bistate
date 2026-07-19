@@ -1,6 +1,9 @@
 # Bistate
 
-Bistate is a real-estate property workspace. This first milestone establishes the Python API, React dashboard, local database migration path, containers, and continuous integration. Underwriting is intentionally out of scope for now.
+Bistate is a real-estate acquisition workspace. Import a listing URL, address, or MLS
+number to create a diligence record, run traceable enrichment, persist workbook-driven
+underwriting, and produce an investment memo. The React workspace adds a property
+pipeline, due-diligence documents, internal notes, and tasks.
 
 ## Stack
 
@@ -27,6 +30,7 @@ uvicorn app.main:app --reload
 ```
 
 The API is available at `http://localhost:8000`; `GET /api/health` returns `{ "status": "ok" }`.
+Interactive OpenAPI documentation is available at `http://localhost:8000/docs`.
 
 ### Web dashboard
 
@@ -38,7 +42,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. Vite forwards `/api` requests to the local API, and the dashboard displays its health status.
+Open `http://localhost:5173`. Vite forwards `/api` requests to the local API.
 
 ## Tests and migrations
 
@@ -79,3 +83,77 @@ The response returns the workbook's acquisition, revenue, operating-cost, financ
 tax, and dashboard sections. Formula references that are internally inconsistent in
 the workbook are intentionally retained literally: the dashboard uses Revenue Model
 B19, while the worksheet's total-gross-revenue B20 uses B10 and B18.
+
+The workbook engine is the financial source of truth. Property workflows call the same
+`calculate` service and persist its complete response; they do not duplicate or modify
+workbook formulas.
+
+## Acquisition workflow
+
+### 1. Import
+
+`POST /api/properties/import` accepts at least one of `listing_url`, `raw_address`, or
+`mls_number`:
+
+```json
+{
+  "listing_url": "https://www.zillow.com/homedetails/example",
+  "raw_address": "12 Maple St, Kingston, NY 12401",
+  "mls_number": "MLS-123"
+}
+```
+
+Provider adapters identify Zillow, Realtor, Redfin, Airbnb, and LoopNet URLs. A generic
+adapter handles other providers, addresses, and MLS references, so new provider clients
+can be added without changing the import endpoint. The normalized property stores
+listing provenance and all available physical, pricing, image, description, agent, GPS,
+and parcel fields. Provider integrations should populate those fields as credentials and
+licensed feeds become available.
+
+### 2. Enrichment
+
+Import automatically runs the enrichment registry. It creates fields for FEMA flood,
+schools, STR regulations, airport and NYC drive time, hospital and grocery distance,
+walkability, wedding and Airbnb suitability, zoning, and parcel information. Every field
+has this traceable shape:
+
+```json
+{
+  "value": null,
+  "source": "FEMA National Flood Hazard Layer",
+  "last_updated": "2026-07-19T03:00:00Z",
+  "confidence": 0.0
+}
+```
+
+Unavailable provider facts remain explicit `null` values with zero confidence rather
+than fabricated data. `POST /api/properties/{property_id}/enrich` refreshes enrichment.
+
+### 3. Underwriting
+
+After enrichment, import calls the existing workbook underwriting engine and persists
+the full response, assumptions, Buy Score, Airbnb Score, Wedding Score, Personal Use
+Score, Overall Score, and confidence. When asking price or taxes are present they are
+passed as workbook assumption overrides. Use
+`POST /api/properties/{property_id}/underwrite` to recalculate intentionally.
+
+Pipeline status is updated through the existing property update endpoint and supports:
+`New`, `Reviewing`, `Underwriting`, `Needs Info`, `Approved`, `Rejected`,
+`Under Contract`, and `Closed`.
+
+### 4. Investment memo
+
+`GET /api/properties/{property_id}/report` returns the complete persisted memo:
+executive summary, strengths, weaknesses, risks, renovation and financial summaries,
+cash required, projected returns, sensitivities, underwriting traceability, assumptions,
+verified comparable properties, missing information, and confidence.
+
+### 5. Workspace records
+
+- `POST/GET /api/properties/{property_id}/documents` uploads and lists inspection PDFs,
+  surveys, permits, photos, and floor plans. Download or delete by document ID.
+- `POST/GET /api/properties/{property_id}/notes` creates and lists internal notes.
+- `POST/GET /api/properties/{property_id}/tasks` creates and lists tasks. Patch a task to
+  assign it, set a due date, or mark it complete.
+
+Uploads are stored below `UPLOAD_DIR` (default `./uploads`) and are limited to 25 MB.

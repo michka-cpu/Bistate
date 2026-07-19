@@ -15,6 +15,7 @@ frontend/dist/
 .env
 .env.*
 !.env.example
+backend/uploads/
 
 # OS/editor
 .DS_Store
