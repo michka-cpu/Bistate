@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.database import Base, engine
-from app.main import app
+from app.main import app as fastapi_app
 import app.models  # noqa: F401 - register model metadata
 
 
@@ -20,4 +20,4 @@ def reset_database() -> None:
 
 @pytest.fixture
 def client() -> TestClient:
-    return TestClient(app)
+    return TestClient(fastapi_app)
