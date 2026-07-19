@@ -26,6 +26,7 @@ class EnrichmentField(BaseModel):
     source: str
     last_updated: datetime
     confidence: float = Field(ge=0, le=1)
+    missing_reason: str | None = None
 
 
 class PropertyDocumentRead(BaseModel):

@@ -24,7 +24,7 @@ def test_import_runs_enrichment_and_underwriting_pipeline(client: TestClient) ->
         "airbnb_suitability", "zoning", "parcel_information",
     }
     for field in prop["enrichment_data"].values():
-        assert set(field) == {"value", "source", "last_updated", "confidence"}
+        assert set(field) == {"value", "source", "last_updated", "confidence", "missing_reason"}
 
 
 def test_import_requires_an_identifier(client: TestClient) -> None:
