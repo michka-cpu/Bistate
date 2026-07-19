@@ -26,3 +26,11 @@ def test_stale_data_detection() -> None:
 
 def test_provider_health_is_explicit() -> None:
     assert all(item["status"] in {"configured", "unavailable"} for item in provider_health())
+
+
+def test_refresh_keeps_the_complete_enrichment_contract(client) -> None:
+    imported = client.post("/api/properties/import", json={"raw_address": "1 Test St, Hudson, NY 12534"})
+    initial = imported.json()["enrichment_data"]
+    refreshed = client.post(f"/api/properties/{imported.json()['id']}/enrich")
+    assert refreshed.status_code == 200
+    assert set(refreshed.json()["enrichment_data"]) == set(initial)
