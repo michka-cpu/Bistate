@@ -14,10 +14,6 @@ from urllib.request import Request, urlopen
 The legacy enrichment keys remain part of the public acquisition contract. Every run
 returns every key, even when an adapter is unavailable or has failed.
 """
-from __future__ import annotations
-
-from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol
 
 from app.config import get_settings
 from app.models.property import Property
