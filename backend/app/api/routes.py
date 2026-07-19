@@ -7,8 +7,10 @@ from app.models.property import Property
 from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
 from app.schemas.underwriting import UnderwritingInputs, UnderwritingResult
 from app.services.underwriting import calculate
+from app.api.acquisition import router as acquisition_router
 
 router = APIRouter()
+router.include_router(acquisition_router)
 
 
 @router.get("/health", tags=["health"])
