@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./bistate.db"
     cors_origins: list[str] = ["http://localhost:5173"]
     upload_dir: str = "./uploads"
+    live_providers_enabled: bool = False
     provider_timeout_seconds: float = 8
     provider_retry_count: int = 2
     fema_api_url: str | None = None

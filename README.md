@@ -184,3 +184,13 @@ routing/places, Walk Score, Airbnb market data, and comparable sales currently r
 configured/approved connector or credential. The application returns explicit unavailable/null
 facts—not scraped, estimated, or invented values—until one is enabled. Comparable data is never
 presented as verified unless returned by a licensed adapter.
+
+## Activated public providers
+
+Set `LIVE_PROVIDERS_ENABLED=true` to permit public HTTP lookups. Bistate uses the official
+[U.S. Census Geocoder](https://geocoding.geo.census.gov/) for coordinates, FEMA's
+[National Flood Hazard Layer](https://hazards.fema.gov/femaportal/wps/portal/NFHLWMS) for flood
+zone/risk, and the [Census ACS API](https://www.census.gov/data/developers/data-sets/acs-5year.html)
+for tract demographics. Public requests use `PROVIDER_TIMEOUT_SECONDS` and bounded retries
+(`PROVIDER_RETRY_COUNT`); HTTP 429 is rate-limit aware. Disabled, malformed, timed-out, or
+rate-limited providers retain their contract key with an explicit unavailable provenance object.

@@ -34,3 +34,23 @@ def test_refresh_keeps_the_complete_enrichment_contract(client) -> None:
     refreshed = client.post(f"/api/properties/{imported.json()['id']}/enrich")
     assert refreshed.status_code == 200
     assert set(refreshed.json()["enrichment_data"]) == set(initial)
+
+
+def test_fema_provider_parses_official_nfhl_response(monkeypatch) -> None:
+    from app.services import enrichment
+    prop = Property(name="Test", address="1 Test St", city="Hudson", state="NY", latitude=42.25, longitude=-73.8)
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_args, **_kwargs: {"features": [{"attributes": {"FLD_ZONE": "AE", "SFHA_TF": "T", "FLD_ZONE_SUBTY": "FLOODWAY"}}]})
+    field = enrichment.FemaFloodProvider().fetch(prop)
+    assert field["value"]["flood_zone"] == "AE"
+    assert field["value"]["flood_risk"] == "special_flood_hazard_area"
+
+
+def test_census_geocoder_persists_coordinates(monkeypatch) -> None:
+    from app.services import enrichment
+    prop = Property(name="Test", address="1 Test St", city="Hudson", state="NY")
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_args, **_kwargs: {"result": {"addressMatches": [{"coordinates": {"x": -73.8, "y": 42.25}, "addressComponents": {"zip": "12534"}}]}})
+    field = enrichment.CensusGeocoder().fetch(prop)
+    assert field["value"]["latitude"] == 42.25
+    assert (prop.latitude, prop.longitude) == (42.25, -73.8)
