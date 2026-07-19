@@ -43,6 +43,6 @@ def test_zero_revenue_affordability_statuses(client) -> None:
 def test_renovation_variance_and_unverified_comparables(client) -> None:
     result = client.post("/api/underwriting/calculate", json={"renovation_budget": 150000}).json()
     renovation = result["renovation"]
-    assert renovation["underwriting_renovation_budget"] == 150000
-    assert (renovation["low_total"], renovation["detailed_base_total"], renovation["high_total"], renovation["variance"]) == (92000, 170000, 395000, 20000)
+    assert renovation["underwriting_budget"] == 150000
+    assert (renovation["detailed_low_total"], renovation["detailed_base_total"], renovation["detailed_high_total"], renovation["variance"]) == (92000, 170000, 395000, 20000)
     assert all(comp["sample"] and not comp["verified"] for comp in result["comparables"]["short_term_rental"])
