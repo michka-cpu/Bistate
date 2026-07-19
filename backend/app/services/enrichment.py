@@ -9,6 +9,15 @@ from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+"""Resilient, provenance-first live-data provider registry.
+
+The legacy enrichment keys remain part of the public acquisition contract. Every run
+returns every key, even when an adapter is unavailable or has failed.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from typing import Any, Protocol
 
 from app.config import get_settings
 from app.models.property import Property
