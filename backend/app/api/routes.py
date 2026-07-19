@@ -19,7 +19,7 @@ def health_check() -> dict[str, str]:
 
 @router.post("/underwriting/calculate", response_model=UnderwritingResult, tags=["underwriting"])
 def calculate_underwriting(payload: UnderwritingInputs) -> UnderwritingResult:
-    """Calculate the primary workbook’s Scenario A underwriting outputs."""
+    """Calculate traceable Scenario A or B outputs from the primary workbook."""
     return calculate(payload)
 
 

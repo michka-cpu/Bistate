@@ -1,80 +1,41 @@
 from math import pow
-
 from app.schemas.underwriting import UnderwritingInputs, UnderwritingResult
 
+RENOVATION = [("Structural / foundation", 5000, 10000, 30000), ("Roof / drainage / gutters", 8000, 15000, 35000), ("Electrical / service / backup power", 10000, 15000, 40000), ("Plumbing / septic / well", 10000, 18000, 45000), ("HVAC / insulation", 10000, 15000, 30000), ("Kitchen", 15000, 20000, 40000), ("Bathrooms / guest rooms", 12000, 18000, 35000), ("Interior finishes / floors / paint", 8000, 12000, 25000), ("Exterior / facade / landscaping", 5000, 10000, 30000), ("Parking / driveway / drainage", 3000, 6000, 30000), ("Event lawn / tent pad / ceremony area", 2500, 5000, 25000), ("Lighting / AV / Wi-Fi", 1500, 3000, 15000), ("Furniture / decor", 0, 0, 0), ("Professional fees / permits", 2000, 3000, 15000)]
+COMPS = [{"name":"Sample A","town":"Hudson","nightly_rate":475,"occupancy":.55}, {"name":"Sample B","town":"Kingston","nightly_rate":350,"occupancy":.60}, {"name":"Sample C","town":"New Paltz","nightly_rate":525,"occupancy":.52}, {"name":"Sample D","town":"Catskills","nightly_rate":650,"occupancy":.48}, {"name":"Sample E","town":"Beacon","nightly_rate":425,"occupancy":.62}]
+WEDDING_COMPS = [{"name":"Sample Venue A","town":"Hudson","venue_fee":14000}, {"name":"Sample Venue B","town":"Kingston","venue_fee":9000}, {"name":"Sample Venue C","town":"New Paltz","venue_fee":18000}, {"name":"Sample Venue D","town":"Catskills","venue_fee":12000}]
 
-def _pmt(rate: float, periods: int, principal: float) -> float:
-    return principal / periods if rate == 0 else principal * rate * pow(1 + rate, periods) / (pow(1 + rate, periods) - 1)
-
-
+DEFAULTS = {"A": dict(purchase_price=500000, renovation_budget=150000, renovation_contingency=.15, furniture_setup=35000, down_payment=.2, mortgage_rate=.0675, loan_term_years=30, closing_cost_percent=.04, lender_points_percent=.01, property_tax=9000, insurance=5000, initial_reserve=30000, personal_use_days=90, available_rental_days=230, nightly_rate=425, occupancy=.5, average_stay=3, cleaning_fee=225, platform_fee=.03, management_fee=0, cancellation_leakage=.03, shtick_weddings=4, other_weddings=2, other_private_events=4, wedding_venue_fee=12000, shtick_production_revenue=18000, other_event_production_revenue=7500, wedding_buyout_revenue=6500, wedding_add_ons=2500, event_direct_cost=.38, event_insurance_permits=5000, noise_shuttle_security_per_event=2500, utilities=7200, internet_software_monitoring=2400, turnover_cleaning_cost=260, maintenance_reserve_percent=.015, capital_replacement_reserve_percent=.01, snow_landscaping_pest=6000, septic_well_generator_reserve=3500, accounting_bookkeeping=4500, str_permit_fees=2500, tax_rate=.4, building_allocation=.8, cost_seg_allocation=.2, annual_adr_growth=.03, annual_operating_expense_inflation=.03, annual_property_appreciation=.03, selling_cost_percent=.07), "B": dict(purchase_price=500000, renovation_budget=150000, renovation_contingency=.15, furniture_setup=35000, down_payment=.25, mortgage_rate=.0725, loan_term_years=30, closing_cost_percent=.04, lender_points_percent=.015, property_tax=9000, insurance=6500, initial_reserve=40000, personal_use_days=14, available_rental_days=320, nightly_rate=425, occupancy=.58, average_stay=3, cleaning_fee=225, platform_fee=.155, management_fee=.18, cancellation_leakage=.03, shtick_weddings=5, other_weddings=3, other_private_events=5, wedding_venue_fee=12000, shtick_production_revenue=18000, other_event_production_revenue=7500, wedding_buyout_revenue=6500, wedding_add_ons=2500, event_direct_cost=.38, event_insurance_permits=6000, noise_shuttle_security_per_event=3000, utilities=7200, internet_software_monitoring=2400, turnover_cleaning_cost=260, maintenance_reserve_percent=.015, capital_replacement_reserve_percent=.01, snow_landscaping_pest=6000, septic_well_generator_reserve=3500, accounting_bookkeeping=5500, str_permit_fees=3000, tax_rate=.4, building_allocation=.8, cost_seg_allocation=.2, annual_adr_growth=.03, annual_operating_expense_inflation=.03, annual_property_appreciation=.03, selling_cost_percent=.07)}
+def _pmt(r,n,p): return p/n if r == 0 else p*r*pow(1+r,n)/(pow(1+r,n)-1)
+def _irr(cashflows):
+    rate=.1
+    for _ in range(100):
+        npv=sum(v/(1+rate)**i for i,v in enumerate(cashflows)); d=sum(-i*v/(1+rate)**(i+1) for i,v in enumerate(cashflows) if i)
+        if abs(d)<1e-12: return None
+        nxt=rate-npv/d
+        if abs(nxt-rate)<1e-9:return nxt
+        rate=nxt
+    return rate
 def calculate(inputs: UnderwritingInputs) -> UnderwritingResult:
-    """Literal implementation of the primary workbook's Scenario A cell formulas."""
-    i = inputs
-    down_payment = i.purchase_price * i.down_payment
-    loan_amount = i.purchase_price - down_payment
-    acquisition = {
-        "purchase_price": i.purchase_price, "down_payment": down_payment, "loan_amount": loan_amount,
-        "closing_costs": i.purchase_price * i.closing_cost_percent, "lender_points_fees": loan_amount * i.lender_points_percent,
-        "renovation_budget": i.renovation_budget, "renovation_contingency": i.renovation_budget * i.renovation_contingency,
-        "furniture_design_setup": i.furniture_setup, "inspection_septic_well_survey": 6500, "permit_architect_engineering": 12000,
-        "technology_locks_cameras_wifi": 7000, "initial_linen_kitchen_supplies": 6000, "wedding_venue_setup": 25000,
-        "initial_reserve": i.initial_reserve,
-    }
-    acquisition["total_project_cost"] = i.purchase_price + sum(v for k, v in acquisition.items() if k not in {"purchase_price", "down_payment", "loan_amount", "total_project_cost"})
-    acquisition["total_cash_required"] = down_payment + sum(v for k, v in acquisition.items() if k not in {"purchase_price", "down_payment", "loan_amount", "total_project_cost", "total_cash_required"})
-    occupied_days = i.available_rental_days * i.occupancy
-    stays = occupied_days / i.average_stay
-    gross_lodging = occupied_days * i.nightly_rate + stays * i.cleaning_fee
-    weddings = i.shtick_weddings + i.other_weddings
-    venue_rental = weddings * i.wedding_venue_fee
-    shtick_production = i.shtick_weddings * i.shtick_production_revenue
-    other_production = i.other_weddings * i.other_event_production_revenue
-    buyout = weddings * i.wedding_buyout_revenue
-    add_ons = weddings * i.wedding_add_ons
-    other_private = i.other_private_events * 7500
-    # Deliberately mirrors Revenue Model B19 and B20: B19 excludes B18; B20 includes B10 and B18.
-    gross_wedding_event = venue_rental + shtick_production + other_production + buyout + add_ons
-    revenue = {"available_rental_days": i.available_rental_days, "occupied_lodging_days": occupied_days, "number_of_stays": stays,
-        "nightly_lodging_revenue": occupied_days * i.nightly_rate, "cleaning_fee_revenue": stays * i.cleaning_fee,
-        "gross_lodging_revenue": gross_lodging, "venue_rental_revenue": venue_rental, "shtick_production_revenue": shtick_production,
-        "other_wedding_production_revenue": other_production, "wedding_lodging_buyout_revenue": buyout,
-        "wedding_add_ons_commissions": add_ons, "other_private_event_revenue": other_private,
-        "gross_wedding_event_revenue": gross_wedding_event, "total_gross_revenue": gross_lodging + other_private}
-    operating_costs = {"property_tax": i.property_tax, "insurance": i.insurance, "utilities": i.utilities,
-        "internet_software_monitoring": i.internet_software_monitoring, "turnover_cleaning": stays * i.turnover_cleaning_cost,
-        "platform_fees": gross_lodging * i.platform_fee, "property_management": gross_lodging * i.management_fee,
-        "revenue_leakage_cancellations": gross_lodging * i.cancellation_leakage,
-        "maintenance_reserve": (i.purchase_price + i.renovation_budget) * i.maintenance_reserve_percent,
-        "capital_replacement_reserve": (i.purchase_price + i.renovation_budget) * i.capital_replacement_reserve_percent,
-        "snow_landscaping_pest": i.snow_landscaping_pest, "septic_well_generator_reserve": i.septic_well_generator_reserve,
-        "accounting_bookkeeping": i.accounting_bookkeeping, "str_permit_fees": i.str_permit_fees,
-        "wedding_event_direct_costs": other_private * i.event_direct_cost, "event_insurance_permits": i.event_insurance_permits,
-        "security_shuttle_noise_logistics": weddings * i.noise_shuttle_security_per_event}
-    operating_costs["total_operating_expenses"] = sum(operating_costs.values())
-    monthly_payment = _pmt(i.mortgage_rate / 12, i.loan_term_years * 12, loan_amount)
-    annual_debt_service = monthly_payment * 12
-    monthly_rate = i.mortgage_rate / 12
-    balance = loan_amount
-    interest = 0.0
-    for _ in range(12):
-        period_interest = balance * monthly_rate
-        interest += period_interest
-        balance -= monthly_payment - period_interest
-    financing = {"monthly_principal_interest": monthly_payment, "annual_debt_service": annual_debt_service, "year_1_interest": interest, "year_1_principal": annual_debt_service - interest}
-    rental_allocation = i.available_rental_days / (i.personal_use_days + i.available_rental_days)
-    building_basis = i.purchase_price * i.building_allocation + i.renovation_budget
-    standard_depreciation = building_basis * rental_allocation / 27.5
-    bonus_depreciation = building_basis * i.cost_seg_allocation * rental_allocation
-    deductions = standard_depreciation + bonus_depreciation + interest * rental_allocation + i.property_tax * rental_allocation + (operating_costs["total_operating_expenses"] - i.property_tax - i.insurance) * rental_allocation
-    tax = {"building_basis": building_basis, "rental_allocation": rental_allocation, "standard_depreciation": standard_depreciation, "cost_seg_eligible_basis": bonus_depreciation, "bonus_depreciation": bonus_depreciation, "potential_year_1_tax_deduction": deductions, "potential_tax_value": deductions * i.tax_rate}
-    # Dashboard references Revenue Model B19 (not B20), exactly as authored.
-    noi = gross_wedding_event - operating_costs["total_operating_expenses"]
-    pre_tax_cash_flow = noi - annual_debt_service
-    dashboard = {"purchase_price": i.purchase_price, "renovation_contingency": i.renovation_budget * (1 + i.renovation_contingency),
-        "total_project_cost": acquisition["total_project_cost"], "total_cash_required": acquisition["total_cash_required"],
-        "gross_lodging_revenue": gross_lodging, "gross_wedding_event_revenue": other_private, "total_gross_revenue": gross_wedding_event,
-        "operating_expenses": operating_costs["total_operating_expenses"], "noi_before_debt": noi, "annual_debt_service": annual_debt_service,
-        "pre_tax_cash_flow": pre_tax_cash_flow, "dscr": noi / annual_debt_service, "potential_year_1_tax_value": tax["potential_tax_value"],
-        "after_tax_cash_flow": pre_tax_cash_flow + tax["potential_tax_value"], "cash_on_cash_return": pre_tax_cash_flow / acquisition["total_cash_required"],
-        "break_even_gross_revenue": operating_costs["total_operating_expenses"] + annual_debt_service}
-    return UnderwritingResult(acquisition=acquisition, revenue=revenue, operating_costs=operating_costs, financing=financing, tax=tax, dashboard=dashboard)
+    raw=inputs.model_dump(); scenario=raw.pop("scenario"); ceiling=raw.pop("zero_revenue_monthly_affordability_ceiling")
+    a={**DEFAULTS[scenario], **{k:v for k,v in raw.items() if v is not None}}
+    dp=a['purchase_price']*a['down_payment']; loan=a['purchase_price']-dp
+    acquisition={"purchase_price":a['purchase_price'],"down_payment":dp,"loan_amount":loan,"closing_costs":a['purchase_price']*a['closing_cost_percent'],"lender_points_fees":loan*a['lender_points_percent'],"renovation_budget":a['renovation_budget'],"renovation_contingency":a['renovation_budget']*a['renovation_contingency'],"furniture_design_setup":a['furniture_setup'],"inspection_septic_well_survey":6500,"permit_architect_engineering":12000,"technology_locks_cameras_wifi":7000,"initial_linen_kitchen_supplies":6000,"wedding_venue_setup":25000,"initial_reserve":a['initial_reserve']}
+    acquisition['total_project_cost']=a['purchase_price']+sum(v for k,v in acquisition.items() if k not in {'purchase_price','down_payment','loan_amount'}); acquisition['total_cash_required']=dp+sum(v for k,v in acquisition.items() if k not in {'purchase_price','down_payment','loan_amount','total_project_cost'})
+    occupied=a['available_rental_days']*a['occupancy']; stays=occupied/a['average_stay']; lodging=occupied*a['nightly_rate']+stays*a['cleaning_fee']; weddings=a['shtick_weddings']+a['other_weddings']; venue=weddings*a['wedding_venue_fee']; prod=a['shtick_weddings']*a['shtick_production_revenue']+a['other_weddings']*a['other_event_production_revenue']; buyout=weddings*a['wedding_buyout_revenue']; addons=weddings*a['wedding_add_ons']; private=a['other_private_events']*7500; event=venue+prod+buyout+addons
+    revenue={"available_rental_days":a['available_rental_days'],"occupied_lodging_days":occupied,"number_of_stays":stays,"nightly_lodging_revenue":occupied*a['nightly_rate'],"cleaning_fee_revenue":stays*a['cleaning_fee'],"gross_lodging_revenue":lodging,"venue_rental_revenue":venue,"shtick_production_revenue":a['shtick_weddings']*a['shtick_production_revenue'],"other_wedding_production_revenue":a['other_weddings']*a['other_event_production_revenue'],"wedding_lodging_buyout_revenue":buyout,"wedding_add_ons_commissions":addons,"other_private_event_revenue":private,"gross_wedding_event_revenue":event,"total_gross_revenue":lodging+private}
+    op={"property_tax":a['property_tax'],"insurance":a['insurance'],"utilities":a['utilities'],"internet_software_monitoring":a['internet_software_monitoring'],"turnover_cleaning":stays*a['turnover_cleaning_cost'],"platform_fees":lodging*a['platform_fee'],"property_management":lodging*a['management_fee'],"revenue_leakage_cancellations":lodging*a['cancellation_leakage'],"maintenance_reserve":(a['purchase_price']+a['renovation_budget'])*a['maintenance_reserve_percent'],"capital_replacement_reserve":(a['purchase_price']+a['renovation_budget'])*a['capital_replacement_reserve_percent'],"snow_landscaping_pest":a['snow_landscaping_pest'],"septic_well_generator_reserve":a['septic_well_generator_reserve'],"accounting_bookkeeping":a['accounting_bookkeeping'],"str_permit_fees":a['str_permit_fees'],"wedding_event_direct_costs":private*a['event_direct_cost'],"event_insurance_permits":a['event_insurance_permits'],"security_shuttle_noise_logistics":weddings*a['noise_shuttle_security_per_event']}; op['total_operating_expenses']=sum(op.values())
+    monthly=_pmt(a['mortgage_rate']/12,a['loan_term_years']*12,loan); balance=loan; interest=0
+    for _ in range(12): interest+=balance*a['mortgage_rate']/12; balance-=monthly-balance*a['mortgage_rate']/12
+    debt=monthly*12; financing={"monthly_principal_interest":monthly,"annual_debt_service":debt,"year_1_interest":interest,"year_1_principal":debt-interest,"initial_loan_balance":loan}
+    allocation=a['available_rental_days']/(a['personal_use_days']+a['available_rental_days']); basis=a['purchase_price']*a['building_allocation']+a['renovation_budget']; standard=basis*allocation/27.5; bonus=basis*a['cost_seg_allocation']*allocation; deductions=standard+bonus+interest*allocation+a['property_tax']*allocation+(op['total_operating_expenses']-a['property_tax']-a['insurance'])*allocation; tax={"building_basis":basis,"rental_allocation":allocation,"standard_depreciation":standard,"cost_seg_eligible_basis":bonus,"bonus_depreciation":bonus,"potential_year_1_tax_deduction":deductions,"potential_tax_value":deductions*a['tax_rate']}
+    noi=event-op['total_operating_expenses']; pre=noi-debt; dashboard={"purchase_price":a['purchase_price'],"renovation_contingency":a['renovation_budget']*(1+a['renovation_contingency']),"total_project_cost":acquisition['total_project_cost'],"total_cash_required":acquisition['total_cash_required'],"gross_lodging_revenue":lodging,"gross_wedding_event_revenue":private,"total_gross_revenue":event,"operating_expenses":op['total_operating_expenses'],"noi_before_debt":noi,"annual_debt_service":debt,"pre_tax_cash_flow":pre,"dscr":noi/debt,"potential_year_1_tax_value":tax['potential_tax_value'],"after_tax_cash_flow":pre+tax['potential_tax_value'],"cash_on_cash_return":pre/acquisition['total_cash_required'],"break_even_gross_revenue":op['total_operating_expenses']+debt}
+    fixed_opex=op['total_operating_expenses']-op['turnover_cleaning']-op['platform_fees']-op['property_management']-op['revenue_leakage_cancellations']-op['wedding_event_direct_costs']-op['security_shuttle_noise_logistics']; zero_month=(fixed_opex+debt)/12; status="NEEDS_REVIEW" if ceiling is None else ("PASS" if zero_month<=ceiling else "FAIL")
+    projection=[]; flows=[-acquisition['total_cash_required']]; bal=loan; value=a['purchase_price']+a['renovation_budget']
+    for year in range(1,11):
+        value*=1+a['annual_property_appreciation']; annual_rev=event*(1+a['annual_adr_growth'])**(year-1); annual_op=op['total_operating_expenses']*(1+a['annual_operating_expense_inflation'])**(year-1); cf=annual_rev-annual_op-debt
+        for _ in range(12): bal-=monthly-bal*a['mortgage_rate']/12
+        sale=value*(1-a['selling_cost_percent'])-bal if year==10 else 0; flows.append(cf+sale); projection.append({"year":year,"property_value":value,"revenue":annual_rev,"operating_expenses":annual_op,"noi":annual_rev-annual_op,"debt_service":debt,"annual_cash_flow":cf,"loan_balance":max(0,bal),"sale_proceeds":sale})
+    renovation={"underwriting_renovation_budget":a['renovation_budget'],"categories":[{"category":n,"low":lo,"base":ba,"high":hi} for n,lo,ba,hi in RENOVATION],"low_total":sum(x[1] for x in RENOVATION),"detailed_base_total":sum(x[2] for x in RENOVATION),"high_total":sum(x[3] for x in RENOVATION),"variance":sum(x[2] for x in RENOVATION)-a['renovation_budget'],"inconsistency_note":"Workbook Assumptions renovation budget drives sources-and-uses; detailed category base total is reported separately and is not substituted."}
+    sensitivity={"purchase_price":{"-20%":a['purchase_price']*.8,"base":a['purchase_price'],"+20%":a['purchase_price']*1.2},"occupancy_adr_lodging_revenue":[{"occupancy":o,"adr":r,"lodging_revenue":o*a['available_rental_days']*r} for o in [.35,.45,.55,.65,.75] for r in [300,350,400,450,500,550]],"renovation_budget":{"-20%":a['renovation_budget']*.8,"base":a['renovation_budget'],"+20%":a['renovation_budget']*1.2}}
+    return UnderwritingResult(scenario=scenario,assumptions=a,acquisition=acquisition,renovation=renovation,revenue=revenue,operating_costs=op,financing=financing,tax=tax,dashboard=dashboard,zero_revenue_affordability={"airbnb_revenue":0,"wedding_revenue":0,"monthly_owner_cash_requirement":zero_month,"zero_revenue_monthly_affordability_ceiling":ceiling,"status":status},sensitivity=sensitivity,projection={"years":projection,"levered_irr":_irr(flows),"cash_flows":flows,"loan_sign_error_correction":"Balances are amortized by reducing principal each month; the workbook's rising-balance sign error is not preserved."},comparables={"warning":"All workbook comparables are sample and unverified; they are not verified market data.","short_term_rental":[{**x,"sample":True,"verified":False} for x in COMPS],"wedding_venues":[{**x,"sample":True,"verified":False} for x in WEDDING_COMPS]},traceability={"workbook":"Upstate_Airbnb_Wedding_Venue_Underwriting_Model.xlsx","formulas":{"loan_amount":"Purchase price - down payment","monthly_payment":"PMT(rate / 12, term * 12, loan amount)","renovation_variance":"Detailed base total - underwriting renovation budget","loan_balance":"Prior balance - (payment - interest)"},"input_references":{"scenario_A":"Assumptions!B5:B64","scenario_B":"Assumptions!C5:C64","renovation":"Renovation Budget!B4:D19","sources_and_uses":"Acquisition Costs!B4:C19"}})
