@@ -65,7 +65,10 @@ def build_investment_memo(prop: Property) -> dict[str, Any]:
         "underwriting_explanation": output.get("traceability", {}),
         "assumptions_used": prop.underwriting_assumptions or {},
         "comparable_properties": [
-            {"address": item.address, "sale_price": float(item.sale_price) if item.sale_price else None, "square_feet": item.square_feet}
+            {"address": item.address, "distance": item.distance_miles, "sale_date": item.sale_date,
+             "sale_price": float(item.sale_price) if item.sale_price else None, "square_feet": item.square_feet,
+             "price_per_square_foot": float(item.price_per_square_foot) if item.price_per_square_foot else None,
+             "source": item.source, "confidence": item.confidence, "verification_status": item.verification_status}
             for item in prop.comparable_properties
         ],
         "missing_information": sorted(set(missing)),
