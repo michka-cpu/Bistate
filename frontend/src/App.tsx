@@ -1,140 +1,182 @@
-import { FormEvent, ReactNode, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
+import type { ChangeEvent, FormEvent } from 'react'
 
-type HealthState = 'checking' | 'online' | 'offline'
-type Property = {
-  id: number
-  name: string
-  address: string
-  city: string
-  state: string
-  postal_code: string | null
-  notes: string | null
-}
-type UnderwritingResult = {
-  scenario: string
+type EnrichmentField = { value: unknown; source: string; last_updated: string; confidence: number }
+type Underwriting = {
   dashboard: Record<string, number>
-  renovation: { underwriting_renovation_budget: number, detailed_base_total: number, variance: number, low_total: number, high_total: number, inconsistency_note: string }
-  zero_revenue_affordability: { status: string, monthly_owner_cash_requirement: number, zero_revenue_monthly_affordability_ceiling: number | null }
-  projection: { years: Array<{ year: number, loan_balance: number, annual_cash_flow: number, sale_proceeds: number }>, levered_irr: number | null }
-  sensitivity: { purchase_price: Record<string, number>, renovation_budget: Record<string, number> }
-  comparables: { warning: string }
+  renovation: Record<string, unknown>
+  sensitivity: Record<string, unknown>
+  projection: { levered_irr: number | null; years: Array<Record<string, number>> }
+  assumptions: Record<string, unknown>
+  traceability: Record<string, unknown>
 }
-type PropertyForm = Omit<Property, 'id'>
+type Property = {
+  id: number; name: string; address: string; city: string; state: string; postal_code: string | null
+  status: string; listing_source: string | null; listing_url: string | null; mls_number: string | null
+  county: string | null; acreage: number | null; bedrooms: number | null; bathrooms: number | null
+  square_feet: number | null; asking_price: number | null; annual_taxes: number | null; images: string[]
+  description: string | null; agent: Record<string, unknown> | null; latitude: number | null; longitude: number | null
+  enrichment_data: Record<string, EnrichmentField>; underwriting_output: Underwriting | null
+  overall_score: number | null; buy_score: number | null; airbnb_score: number | null; wedding_score: number | null
+  personal_use_score: number | null; confidence_score: number | null
+}
+type Note = { id: number; body: string; author: string | null; created_at: string }
+type Task = { id: number; title: string; assignee: string | null; due_date: string | null; completed: boolean }
+type Document = { id: number; filename: string; document_type: string; size_bytes: number }
+type Memo = { executive_summary: string; strengths: string[]; weaknesses: string[]; risks: string[]; comparable_properties: Array<Record<string, unknown>>; missing_information: string[] }
 
-const emptyProperty: PropertyForm = { name: '', address: '', city: '', state: '', postal_code: '', notes: '' }
+const tabs = ['Overview', 'Financials', 'Underwriting', 'Renovation', 'Airbnb', 'Wedding', 'Maps', 'Comparable Sales', 'Documents', 'Notes'] as const
+const statuses = ['New', 'Reviewing', 'Underwriting', 'Needs Info', 'Approved', 'Rejected', 'Under Contract', 'Closed']
+type Tab = typeof tabs[number]
 
-function App() {
-  const [health, setHealth] = useState<HealthState>('checking')
+export default function App() {
   const [properties, setProperties] = useState<Property[]>([])
-  const [selected, setSelected] = useState<Property | null>(null)
-  const [form, setForm] = useState<PropertyForm>(emptyProperty)
-  const [editing, setEditing] = useState(false)
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [activeTab, setActiveTab] = useState<Tab>('Overview')
+  const [importValue, setImportValue] = useState('')
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [underwriting, setUnderwriting] = useState<UnderwritingResult | null>(null)
-  const [scenario, setScenario] = useState<'A' | 'B'>('A')
+  const [notes, setNotes] = useState<Note[]>([])
+  const [tasks, setTasks] = useState<Task[]>([])
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [memo, setMemo] = useState<Memo | null>(null)
 
-  async function loadProperties() {
+  const selected = properties.find((property) => property.id === selectedId) ?? null
+
+  async function loadProperties(preferredId?: number) {
     const response = await fetch('/api/properties')
-    if (!response.ok) throw new Error('Unable to load properties')
-    setProperties(await response.json() as Property[])
+    if (!response.ok) throw new Error('Unable to load the acquisition pipeline.')
+    const data = await response.json() as Property[]
+    setProperties(data)
+    setSelectedId(preferredId ?? selectedId ?? data[0]?.id ?? null)
   }
 
-  useEffect(() => {
-    void fetch('/api/health')
-      .then(async (response) => response.ok && (await response.json()).status === 'ok' ? setHealth('online') : setHealth('offline'))
-      .catch(() => setHealth('offline'))
-    void loadProperties().catch(() => setError('Properties could not be loaded.'))
-    void loadUnderwriting().catch(() => setError('Underwriting could not be calculated.'))
-  }, [])
-
-  async function loadUnderwriting(selectedScenario = scenario) {
-    const response = await fetch('/api/underwriting/calculate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenario: selectedScenario }) })
-    if (!response.ok) throw new Error('Unable to calculate underwriting')
-    setUnderwriting(await response.json() as UnderwritingResult)
+  async function loadWorkspace(propertyId: number) {
+    const [notesResponse, tasksResponse, documentsResponse, memoResponse] = await Promise.all([
+      fetch(`/api/properties/${propertyId}/notes`), fetch(`/api/properties/${propertyId}/tasks`),
+      fetch(`/api/properties/${propertyId}/documents`), fetch(`/api/properties/${propertyId}/report`),
+    ])
+    setNotes(notesResponse.ok ? await notesResponse.json() as Note[] : [])
+    setTasks(tasksResponse.ok ? await tasksResponse.json() as Task[] : [])
+    setDocuments(documentsResponse.ok ? await documentsResponse.json() as Document[] : [])
+    setMemo(memoResponse.ok ? await memoResponse.json() as Memo : null)
   }
 
-  function beginCreate() {
-    setSelected(null)
-    setForm(emptyProperty)
-    setEditing(true)
-    setError('')
-  }
+  // The initial pipeline load should run once; later mutations refresh it explicitly.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { void loadProperties().catch((reason: Error) => setError(reason.message)) }, [])
+  useEffect(() => { if (selectedId) void loadWorkspace(selectedId) }, [selectedId])
 
-  function beginEdit(property: Property) {
-    setSelected(property)
-    setForm(property)
-    setEditing(true)
-    setError('')
-  }
-
-  async function saveProperty(event: FormEvent<HTMLFormElement>) {
+  async function importProperty(event: FormEvent) {
     event.preventDefault()
-    const endpoint = selected ? `/api/properties/${selected.id}` : '/api/properties'
-    const response = await fetch(endpoint, {
-      method: selected ? 'PUT' : 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form),
-    })
-    if (!response.ok) {
-      setError('Property could not be saved. Check the required fields.')
-      return
-    }
-    const saved = await response.json() as Property
-    await loadProperties()
-    setSelected(saved)
-    setEditing(false)
+    if (!importValue.trim()) return
+    setBusy(true); setError('')
+    const value = importValue.trim()
+    const body = value.startsWith('http') ? { listing_url: value } : (/^MLS[-\s#]/i.test(value) ? { mls_number: value } : { raw_address: value })
+    try {
+      const response = await fetch('/api/properties/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      if (!response.ok) throw new Error('Import failed. Check the listing URL, address, or MLS number.')
+      const property = await response.json() as Property
+      setImportValue(''); await loadProperties(property.id); await loadWorkspace(property.id)
+    } catch (reason) { setError((reason as Error).message) } finally { setBusy(false) }
   }
 
-  async function deleteProperty(property: Property) {
-    if (!window.confirm(`Delete ${property.name}?`)) return
-    const response = await fetch(`/api/properties/${property.id}`, { method: 'DELETE' })
-    if (!response.ok) {
-      setError('Property could not be deleted.')
-      return
-    }
-    await loadProperties()
-    setSelected(null)
-    setEditing(false)
+  async function updateStatus(status: string) {
+    if (!selected) return
+    const response = await fetch(`/api/properties/${selected.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) })
+    if (response.ok) await loadProperties(selected.id)
   }
-
-  const statusStyles = { checking: 'bg-amber-400', online: 'bg-emerald-400', offline: 'bg-rose-400' }
 
   return (
-    <main className="min-h-screen bg-slate-950 px-6 py-10 text-slate-100 sm:px-12">
-      <div className="mx-auto max-w-6xl">
-        <header className="flex items-center justify-between border-b border-slate-800 pb-7">
-          <div><p className="text-sm font-semibold uppercase tracking-[0.28em] text-emerald-400">Bistate</p><h1 className="mt-2 text-3xl font-semibold">Properties</h1></div>
-          <div className="flex items-center gap-2 text-sm text-slate-300"><span className={`h-2.5 w-2.5 rounded-full ${statusStyles[health]}`} />API {health}</div>
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand"><span className="brand-mark">B</span><div><strong>Bistate</strong><small>Acquisition OS</small></div></div>
+        <div className="pipeline-label"><span>Property pipeline</span><span>{properties.length}</span></div>
+        <nav className="property-list" aria-label="Property pipeline">
+          {properties.map((property) => <button key={property.id} className={`property-row ${property.id === selectedId ? 'active' : ''}`} onClick={() => { setSelectedId(property.id); setActiveTab('Overview') }}><span className="property-score">{Math.round(property.overall_score ?? 0)}</span><span><strong>{property.name}</strong><small>{property.city}, {property.state}</small></span><StatusDot status={property.status} /></button>)}
+          {!properties.length && <div className="empty-sidebar">Import your first opportunity to start the pipeline.</div>}
+        </nav>
+        <div className="sidebar-footer"><span className="online-dot" /> Workbook engine ready</div>
+      </aside>
+
+      <main className="workspace">
+        <header className="topbar">
+          <form className="import-form" onSubmit={importProperty}>
+            <span className="search-icon">＋</span>
+            <input aria-label="Listing URL, address, or MLS number" value={importValue} onChange={(event) => setImportValue(event.target.value)} placeholder="Paste a Zillow, Realtor, Redfin, Airbnb, LoopNet URL, address, or MLS #" />
+            <button disabled={busy}>{busy ? 'Analyzing…' : 'Import & analyze'}</button>
+          </form>
         </header>
-
-        {underwriting && <section className="mt-8 rounded-xl border border-emerald-900 bg-slate-900 p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-400">Underwriting · Scenario {underwriting.scenario}</p><h2 className="mt-1 text-xl font-semibold">Primary workbook results</h2></div><div className="flex gap-2"><select aria-label="Underwriting scenario" value={scenario} onChange={(event) => { const next = event.target.value as 'A' | 'B'; setScenario(next); void loadUnderwriting(next) }} className="rounded border border-slate-700 bg-slate-950 px-3 text-sm"><option value="A">Scenario A · Second Home</option><option value="B">Scenario B · Investment</option></select><button onClick={() => void loadUnderwriting()} className="rounded border border-emerald-700 px-3 py-2 text-sm text-emerald-300">Recalculate</button></div></div><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{([['Total cash required', 'total_cash_required', '$'], ['NOI before debt', 'noi_before_debt', '$'], ['DSCR', 'dscr', '×'], ['Cash-on-cash return', 'cash_on_cash_return', '%']] as const).map(([label, key, suffix]) => <div key={key} className="rounded-lg bg-slate-950 p-4"><p className="text-sm text-slate-400">{label}</p><p className="mt-1 text-xl font-semibold">{suffix === '%' ? `${(underwriting.dashboard[key] * 100).toFixed(1)}%` : `${suffix}${underwriting.dashboard[key].toLocaleString(undefined, { maximumFractionDigits: 0 })}`}</p></div>)}</div><div className="mt-5 grid gap-4 lg:grid-cols-3"><Panel title="Renovation summary"><p>Underwriting budget: {money(underwriting.renovation.underwriting_renovation_budget)}</p><p>Category range: {money(underwriting.renovation.low_total)} – {money(underwriting.renovation.high_total)}</p><p>Detailed base: {money(underwriting.renovation.detailed_base_total)}</p><p className="mt-2 text-amber-300">Variance: {money(underwriting.renovation.variance)}. {underwriting.renovation.inconsistency_note}</p></Panel><Panel title="Zero-revenue affordability"><p className="font-semibold">{underwriting.zero_revenue_affordability.status}</p><p>Owner cash required: {money(underwriting.zero_revenue_affordability.monthly_owner_cash_requirement)} / month</p><p>Ceiling: {underwriting.zero_revenue_affordability.zero_revenue_monthly_affordability_ceiling === null ? 'Not provided — needs review' : money(underwriting.zero_revenue_affordability.zero_revenue_monthly_affordability_ceiling)}</p></Panel><Panel title="Sensitivity"><p>Purchase: {money(underwriting.sensitivity.purchase_price['-20%'])} to {money(underwriting.sensitivity.purchase_price['+20%'])}</p><p>Renovation: {money(underwriting.sensitivity.renovation_budget['-20%'])} to {money(underwriting.sensitivity.renovation_budget['+20%'])}</p><p className="mt-2 text-slate-400">Occupancy and ADR sensitivity is included in the API response.</p></Panel></div><div className="mt-5 overflow-x-auto"><h3 className="font-semibold">10-year projection</h3><table className="mt-2 w-full text-sm"><thead className="text-left text-slate-400"><tr><th>Year</th><th>Loan balance</th><th>Cash flow</th><th>Sale proceeds</th></tr></thead><tbody>{underwriting.projection.years.map((year) => <tr key={year.year} className="border-t border-slate-800"><td>{year.year}</td><td>{money(year.loan_balance)}</td><td>{money(year.annual_cash_flow)}</td><td>{money(year.sale_proceeds)}</td></tr>)}</tbody></table><p className="mt-2">Levered IRR: {underwriting.projection.levered_irr === null ? 'N/A' : `${(underwriting.projection.levered_irr * 100).toFixed(1)}%`}</p></div><p className="mt-5 rounded bg-amber-950 p-3 text-sm text-amber-200">Comparable data warning: {underwriting.comparables.warning}</p></section>}
-
-        <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_1.2fr]">
-          <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-            <div className="flex items-center justify-between"><h2 className="text-lg font-semibold">Property list</h2><button onClick={beginCreate} className="rounded-md bg-emerald-500 px-3 py-2 text-sm font-medium text-slate-950">Add property</button></div>
-            {properties.length === 0 ? <p className="mt-6 text-sm text-slate-400">No properties yet. Add your first property to begin.</p> : <ul className="mt-4 divide-y divide-slate-800">{properties.map((property) => <li key={property.id}><button onClick={() => { setSelected(property); setEditing(false) }} className="w-full py-4 text-left"><span className="block font-medium">{property.name}</span><span className="text-sm text-slate-400">{property.city}, {property.state}</span></button></li>)}</ul>}
+        {error && <div className="error-banner">{error}</div>}
+        {selected ? <>
+          <section className="property-hero">
+            <div><div className="eyebrow">{selected.listing_source ?? 'Manual import'} {selected.mls_number ? `· ${selected.mls_number}` : ''}</div><h1>{selected.name}</h1><p>{selected.address}, {selected.city}, {selected.state} {selected.postal_code}</p></div>
+            <div className="hero-actions"><select aria-label="Pipeline status" value={selected.status} onChange={(event) => void updateStatus(event.target.value)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select>{selected.listing_url && <a href={selected.listing_url} target="_blank" rel="noreferrer">View listing ↗</a>}</div>
           </section>
-
-          <section className="rounded-xl border border-slate-800 bg-slate-900 p-6">
-            {error && <p className="mb-4 rounded bg-rose-950 p-3 text-sm text-rose-200">{error}</p>}
-            {editing ? <PropertyEditor form={form} setForm={setForm} onSave={saveProperty} onCancel={() => setEditing(false)} /> : selected ? <PropertyDetail property={selected} onEdit={() => beginEdit(selected)} onDelete={() => void deleteProperty(selected)} /> : <div className="py-16 text-center text-slate-400">Select a property to view its details.</div>}
-          </section>
-        </div>
-      </div>
-    </main>
+          <KpiGrid property={selected} />
+          <nav className="tabs" aria-label="Property sections">{tabs.map((tab) => <button key={tab} className={activeTab === tab ? 'active' : ''} onClick={() => setActiveTab(tab)}>{tab}</button>)}</nav>
+          <section className="tab-content"><TabContent tab={activeTab} property={selected} memo={memo} notes={notes} tasks={tasks} documents={documents} refresh={() => loadWorkspace(selected.id)} /></section>
+        </> : <EmptyState />}
+      </main>
+    </div>
   )
 }
 
-function money(value: number) { return value.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }) }
-function Panel({ title, children }: { title: string, children: ReactNode }) { return <div className="rounded-lg bg-slate-950 p-4 text-sm"><h3 className="mb-2 font-semibold">{title}</h3>{children}</div> }
-
-function PropertyEditor({ form, setForm, onSave, onCancel }: { form: PropertyForm; setForm: (value: PropertyForm) => void; onSave: (event: FormEvent<HTMLFormElement>) => void; onCancel: () => void }) {
-  const update = (key: keyof PropertyForm, value: string) => setForm({ ...form, [key]: value })
-  return <form onSubmit={onSave}><h2 className="text-lg font-semibold">{form.name ? 'Edit property' : 'New property'}</h2><div className="mt-5 grid gap-4 sm:grid-cols-2">{(['name', 'address', 'city', 'state', 'postal_code'] as const).map((key) => <label key={key} className="text-sm capitalize text-slate-300">{key.replace('_', ' ')}<input required={key !== 'postal_code'} value={form[key] ?? ''} onChange={(event) => update(key, event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-slate-100" /></label>)}</div><label className="mt-4 block text-sm text-slate-300">Notes<textarea value={form.notes ?? ''} onChange={(event) => update('notes', event.target.value)} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 p-2 text-slate-100" /></label><div className="mt-5 flex gap-3"><button className="rounded bg-emerald-500 px-4 py-2 font-medium text-slate-950">Save</button><button type="button" onClick={onCancel} className="rounded border border-slate-700 px-4 py-2">Cancel</button></div></form>
+function KpiGrid({ property }: { property: Property }) {
+  const output = property.underwriting_output
+  const dashboard = output?.dashboard ?? {}
+  const capRate = dashboard.noi_before_debt && dashboard.purchase_price ? dashboard.noi_before_debt / dashboard.purchase_price : null
+  const values = [
+    ['Overall score', score(property.overall_score), 'score'], ['Cash required', money(dashboard.total_cash_required), 'money'],
+    ['Cash-on-cash', percent(dashboard.cash_on_cash_return), 'return'], ['IRR', percent(output?.projection.levered_irr), 'return'],
+    ['Cap rate', percent(capRate), 'return'], ['Debt coverage', dashboard.dscr ? `${dashboard.dscr.toFixed(2)}×` : '—', 'ratio'],
+    ['Renovation', money(dashboard.renovation_contingency), 'money'], ['Confidence', score(property.confidence_score), 'score'],
+  ]
+  return <section className="kpi-grid">{values.map(([label, value, kind]) => <article key={label}><span>{label}</span><strong className={kind}>{value}</strong></article>)}</section>
 }
 
-function PropertyDetail({ property, onEdit, onDelete }: { property: Property; onEdit: () => void; onDelete: () => void }) {
-  return <div><div className="flex items-start justify-between"><div><h2 className="text-xl font-semibold">{property.name}</h2><p className="mt-1 text-slate-400">{property.address}<br />{property.city}, {property.state} {property.postal_code}</p></div><div className="flex gap-2"><button onClick={onEdit} className="rounded border border-slate-700 px-3 py-2 text-sm">Edit</button><button onClick={onDelete} className="rounded bg-rose-500 px-3 py-2 text-sm text-white">Delete</button></div></div>{property.notes && <p className="mt-6 whitespace-pre-wrap border-t border-slate-800 pt-5 text-slate-300">{property.notes}</p>}</div>
+function TabContent({ tab, property, memo, notes, tasks, documents, refresh }: { tab: Tab; property: Property; memo: Memo | null; notes: Note[]; tasks: Task[]; documents: Document[]; refresh: () => Promise<void> }) {
+  const output = property.underwriting_output
+  if (tab === 'Overview') return <Overview property={property} memo={memo} tasks={tasks} refresh={refresh} />
+  if (tab === 'Financials') return <DataSection title="Workbook financial summary" data={output?.dashboard ?? {}} />
+  if (tab === 'Underwriting') return <div className="two-column"><DataSection title="Assumptions used" data={output?.assumptions ?? {}} /><DataSection title="Traceability" data={output?.traceability ?? {}} /></div>
+  if (tab === 'Renovation') return <DataSection title="Renovation range and categories" data={output?.renovation ?? {}} />
+  if (tab === 'Airbnb') return <Suitability title="Airbnb suitability" score={property.airbnb_score} field={property.enrichment_data.airbnb_suitability} />
+  if (tab === 'Wedding') return <Suitability title="Wedding suitability" score={property.wedding_score} field={property.enrichment_data.wedding_suitability} />
+  if (tab === 'Maps') return <EnrichmentGrid property={property} />
+  if (tab === 'Comparable Sales') return <Comparables memo={memo} />
+  if (tab === 'Documents') return <Documents propertyId={property.id} documents={documents} refresh={refresh} />
+  return <NotesAndTasks propertyId={property.id} notes={notes} tasks={tasks} refresh={refresh} />
 }
 
-export default App
+function Overview({ property, memo, tasks, refresh }: { property: Property; memo: Memo | null; tasks: Task[]; refresh: () => Promise<void> }) {
+  return <div className="overview-grid"><article className="panel memo-panel"><div className="panel-title"><span>Investment memo</span><span className="confidence-pill">{Math.round(property.confidence_score ?? 0)}% confidence</span></div><p className="summary">{memo?.executive_summary ?? 'Investment memo is being prepared.'}</p><MemoList title="Strengths" items={memo?.strengths ?? []} tone="positive" /><MemoList title="Risks & weaknesses" items={[...(memo?.weaknesses ?? []), ...(memo?.risks ?? [])]} tone="warning" /></article><article className="panel"><div className="panel-title"><span>Property facts</span></div><dl className="facts"><Fact label="Asking price" value={money(property.asking_price)} /><Fact label="Annual taxes" value={money(property.annual_taxes)} /><Fact label="Beds / baths" value={`${property.bedrooms ?? '—'} / ${property.bathrooms ?? '—'}`} /><Fact label="Square feet" value={property.square_feet?.toLocaleString() ?? '—'} /><Fact label="Acreage" value={property.acreage?.toString() ?? '—'} /><Fact label="County" value={property.county ?? '—'} /></dl></article><article className="panel task-panel"><div className="panel-title"><span>Open tasks</span><span>{tasks.filter((task) => !task.completed).length}</span></div>{tasks.slice(0, 4).map((task) => <TaskRow key={task.id} propertyId={property.id} task={task} refresh={refresh} />)}{!tasks.length && <p className="muted">No tasks yet. Add one in Notes.</p>}</article><article className="panel missing-panel"><div className="panel-title"><span>Missing information</span><span>{memo?.missing_information.length ?? 0}</span></div><div className="chip-list">{memo?.missing_information.map((item) => <span key={item}>{labelize(item)}</span>)}</div></article></div>
+}
+
+function EnrichmentGrid({ property }: { property: Property }) { return <div className="enrichment-grid">{Object.entries(property.enrichment_data).map(([key, field]) => <article className="panel" key={key}><div className="panel-title"><span>{labelize(key)}</span><span>{Math.round(field.confidence * 100)}%</span></div><strong className="enrichment-value">{field.value === null ? 'Needs verification' : String(field.value)}</strong><small>{field.source}</small><small>Updated {new Date(field.last_updated).toLocaleDateString()}</small></article>)}</div> }
+function Suitability({ title, score: value, field }: { title: string; score: number | null; field?: EnrichmentField }) { return <article className="panel suitability"><div className="score-ring">{Math.round(value ?? 0)}</div><div><div className="eyebrow">Bistate suitability model</div><h2>{title}</h2><p>{field?.value === null || !field ? 'Provider facts are incomplete. Verify local regulations, demand, and physical feasibility before approval.' : 'The initial suitability score uses available property facts. Validate it with market and regulatory diligence.'}</p><small>Source: {field?.source ?? 'Not available'} · Confidence {Math.round((field?.confidence ?? 0) * 100)}%</small></div></article> }
+function DataSection({ title, data }: { title: string; data: Record<string, unknown> }) { return <article className="panel data-panel"><div className="panel-title"><span>{title}</span></div><div className="data-grid">{Object.entries(data).map(([key, value]) => <div key={key}><span>{labelize(key)}</span><strong>{formatValue(value)}</strong></div>)}</div></article> }
+function Comparables({ memo }: { memo: Memo | null }) { return <article className="panel"><div className="panel-title"><span>Verified comparable sales</span><span>{memo?.comparable_properties.length ?? 0}</span></div>{memo?.comparable_properties.length ? <div className="data-grid">{memo.comparable_properties.map((item, index) => <div key={index}><strong>{String(item.address)}</strong><span>{money(item.sale_price as number | null)} · {String(item.square_feet ?? '—')} sq ft</span></div>)}</div> : <p className="muted">No verified comparable sales have been attached. Workbook sample comparables remain clearly marked as unverified.</p>}</article> }
+
+function Documents({ propertyId, documents, refresh }: { propertyId: number; documents: Document[]; refresh: () => Promise<void> }) {
+  const [type, setType] = useState('inspection')
+  async function upload(event: ChangeEvent<HTMLInputElement>) { const file = event.target.files?.[0]; if (!file) return; const data = new FormData(); data.append('document_type', type); data.append('file', file); await fetch(`/api/properties/${propertyId}/documents`, { method: 'POST', body: data }); await refresh() }
+  return <article className="panel"><div className="panel-title"><span>Due diligence documents</span><div className="upload-controls"><select value={type} onChange={(event) => setType(event.target.value)}><option value="inspection">Inspection</option><option value="survey">Survey</option><option value="permit">Permit</option><option value="photo">Photo</option><option value="floor_plan">Floor plan</option></select><label className="upload-button">Upload file<input type="file" onChange={(event) => void upload(event)} /></label></div></div><div className="document-list">{documents.map((document) => <a key={document.id} href={`/api/properties/${propertyId}/documents/${document.id}/download`}><span className="file-icon">▤</span><span><strong>{document.filename}</strong><small>{labelize(document.document_type)} · {Math.ceil(document.size_bytes / 1024)} KB</small></span><span>Download</span></a>)}{!documents.length && <p className="muted">Upload inspections, surveys, permits, photos, or floor plans.</p>}</div></article>
+}
+
+function NotesAndTasks({ propertyId, notes, tasks, refresh }: { propertyId: number; notes: Note[]; tasks: Task[]; refresh: () => Promise<void> }) {
+  const [note, setNote] = useState(''); const [task, setTask] = useState('')
+  async function add(path: 'notes' | 'tasks', body: Record<string, string>) { await fetch(`/api/properties/${propertyId}/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); await refresh() }
+  return <div className="two-column"><article className="panel"><div className="panel-title"><span>Internal notes</span></div><form className="inline-create" onSubmit={(event) => { event.preventDefault(); if (note) void add('notes', { body: note }).then(() => setNote('')) }}><input value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a diligence note…" /><button>Add</button></form><div className="note-list">{notes.map((item) => <div key={item.id}><p>{item.body}</p><small>{item.author ?? 'Bistate team'} · {new Date(item.created_at).toLocaleDateString()}</small></div>)}</div></article><article className="panel"><div className="panel-title"><span>Tasks</span></div><form className="inline-create" onSubmit={(event) => { event.preventDefault(); if (task) void add('tasks', { title: task }).then(() => setTask('')) }}><input value={task} onChange={(event) => setTask(event.target.value)} placeholder="Call broker, verify zoning…" /><button>Add</button></form>{tasks.map((item) => <TaskRow key={item.id} propertyId={propertyId} task={item} refresh={refresh} />)}</article></div>
+}
+
+function TaskRow({ propertyId, task, refresh }: { propertyId: number; task: Task; refresh: () => Promise<void> }) { return <label className={`task-row ${task.completed ? 'complete' : ''}`}><input type="checkbox" checked={task.completed} onChange={async (event) => { await fetch(`/api/properties/${propertyId}/tasks/${task.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed: event.target.checked }) }); await refresh() }} /><span><strong>{task.title}</strong><small>{task.assignee ?? 'Unassigned'}{task.due_date ? ` · Due ${task.due_date}` : ''}</small></span></label> }
+function MemoList({ title, items, tone }: { title: string; items: string[]; tone: string }) { return <div className={`memo-list ${tone}`}><strong>{title}</strong>{items.length ? <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="muted">None identified yet.</p>}</div> }
+function Fact({ label, value }: { label: string; value: string }) { return <div><dt>{label}</dt><dd>{value}</dd></div> }
+function StatusDot({ status }: { status: string }) { return <span className={`status-dot status-${status.toLowerCase().replace(/ /g, '-')}`} title={status} /> }
+function EmptyState() { return <section className="empty-state"><div className="empty-icon">⌂</div><h1>Build your acquisition pipeline</h1><p>Paste a listing URL, property address, or MLS number above. Bistate will create the property, run enrichment, execute the workbook underwriting engine, and prepare an investment memo.</p></section> }
+function labelize(value: string) { return value.replace(/_/g, ' ').replace(/\b\w/g, (letter: string) => letter.toUpperCase()) }
+function money(value: number | null | undefined) { return value == null ? '—' : value.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }) }
+function percent(value: number | null | undefined) { return value == null ? '—' : `${(value * 100).toFixed(1)}%` }
+function score(value: number | null | undefined) { return value == null ? '—' : `${Math.round(value)}/100` }
+function formatValue(value: unknown): string { if (typeof value === 'number') return Math.abs(value) < 1 ? percent(value) : value.toLocaleString(undefined, { maximumFractionDigits: 2 }); if (value === null) return '—'; if (Array.isArray(value)) return `${value.length} records`; if (typeof value === 'object') return 'View detailed output'; return String(value) }
