@@ -16,6 +16,15 @@ class PropertyCreate(PropertyBase):
     pass
 
 
+class PropertyUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    address: str | None = Field(default=None, min_length=1, max_length=500)
+    city: str | None = Field(default=None, min_length=1, max_length=100)
+    state: str | None = Field(default=None, min_length=2, max_length=2)
+    postal_code: str | None = Field(default=None, max_length=20)
+    notes: str | None = None
+
+
 class PropertyRead(PropertyBase):
     id: int
     created_at: datetime
