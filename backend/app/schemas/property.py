@@ -27,6 +27,10 @@ class PropertyBase(BaseModel):
     square_feet: int | None = Field(default=None, ge=0)
     asking_price: float | None = Field(default=None, ge=0)
     annual_taxes: float | None = Field(default=None, ge=0)
+    hoa: float | None = Field(default=None, ge=0)
+    year_built: int | None = Field(default=None, ge=0)
+    parcel_id: str | None = None
+    listing_status: str | None = None
     images: list[str] = Field(default_factory=list)
     description: str | None = None
     agent: dict[str, Any] | None = None
@@ -56,6 +60,10 @@ class PropertyUpdate(BaseModel):
     square_feet: int | None = Field(default=None, ge=0)
     asking_price: float | None = Field(default=None, ge=0)
     annual_taxes: float | None = Field(default=None, ge=0)
+    hoa: float | None = Field(default=None, ge=0)
+    year_built: int | None = Field(default=None, ge=0)
+    parcel_id: str | None = None
+    listing_status: str | None = None
     images: list[str] | None = None
     description: str | None = None
     agent: dict[str, Any] | None = None
@@ -74,5 +82,7 @@ class PropertyRead(PropertyBase):
     wedding_score: float | None = None
     personal_use_score: float | None = None
     confidence_score: float | None = None
+    pipeline_state: dict[str, Any] = Field(default_factory=dict)
+    provider_errors: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(from_attributes=True)
