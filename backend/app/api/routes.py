@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.property import Property
 from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
+from app.schemas.underwriting import UnderwritingInputs, UnderwritingResult
+from app.services.underwriting import calculate
 
 router = APIRouter()
 
@@ -13,6 +15,12 @@ router = APIRouter()
 def health_check() -> dict[str, str]:
     """Return the service status for uptime checks and the web dashboard."""
     return {"status": "ok"}
+
+
+@router.post("/underwriting/calculate", response_model=UnderwritingResult, tags=["underwriting"])
+def calculate_underwriting(payload: UnderwritingInputs) -> UnderwritingResult:
+    """Calculate the primary workbook’s Scenario A underwriting outputs."""
+    return calculate(payload)
 
 
 @router.post("/properties", response_model=PropertyRead, status_code=status.HTTP_201_CREATED, tags=["properties"])
