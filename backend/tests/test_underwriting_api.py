@@ -21,3 +21,28 @@ def test_underwriting_recalculates_from_overrides(client) -> None:
     result = response.json()
     assert result["revenue"]["occupied_lodging_days"] == 138
     assert result["revenue"]["nightly_lodging_revenue"] == 69000
+
+
+def test_scenario_b_sources_uses_and_declining_balance(client) -> None:
+    result = client.post("/api/underwriting/calculate", json={"scenario": "B"}).json()
+    assert result["scenario"] == "B"
+    assert result["acquisition"]["loan_amount"] == 375000
+    assert result["financing"]["annual_debt_service"] > 0
+    balances = [year["loan_balance"] for year in result["projection"]["years"]]
+    assert all(next_balance < balance for balance, next_balance in zip(balances, balances[1:]))
+
+
+def test_zero_revenue_affordability_statuses(client) -> None:
+    review = client.post("/api/underwriting/calculate", json={}).json()
+    assert review["zero_revenue_affordability"]["status"] == "NEEDS_REVIEW"
+    required = review["zero_revenue_affordability"]["monthly_owner_cash_requirement"]
+    assert client.post("/api/underwriting/calculate", json={"zero_revenue_monthly_affordability_ceiling": required}).json()["zero_revenue_affordability"]["status"] == "PASS"
+    assert client.post("/api/underwriting/calculate", json={"zero_revenue_monthly_affordability_ceiling": required - 1}).json()["zero_revenue_affordability"]["status"] == "FAIL"
+
+
+def test_renovation_variance_and_unverified_comparables(client) -> None:
+    result = client.post("/api/underwriting/calculate", json={"renovation_budget": 150000}).json()
+    renovation = result["renovation"]
+    assert renovation["underwriting_budget"] == 150000
+    assert (renovation["detailed_low_total"], renovation["detailed_base_total"], renovation["detailed_high_total"], renovation["variance"]) == (92000, 170000, 395000, 20000)
+    assert all(comp["sample"] and not comp["verified"] for comp in result["comparables"]["short_term_rental"])
