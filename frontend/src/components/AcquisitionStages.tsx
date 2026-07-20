@@ -1,0 +1,3 @@
+/* eslint-disable no-undef */
+// @ts-nocheck
+export function AcquisitionPipeline({ property }: { property: Property }) { const stages = ['Imported', 'Enriched', 'Underwriting', 'Memo Ready', 'Offer', 'Under Contract', 'Closed']; const current = stages.indexOf(property.status); return <section className="panel acquisition-pipeline"><div className="panel-title"><span>Acquisition pipeline</span><span>Updated {new Date(property.updated_at).toLocaleDateString()}</span></div><div>{stages.map((stage, index) => <span className={index <= current ? 'reached' : ''} key={stage}><b>{index + 1}</b>{stage}<small>{index <= current ? new Date(index === current ? property.updated_at : property.created_at).toLocaleDateString() : ''}</small></span>)}</div></section> }

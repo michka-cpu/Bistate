@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
-from app.models.acquisition import PropertyDocument, PropertyNote, PropertyTask
+from app.models.acquisition import PropertyActivityEvent, PropertyDocument, PropertyNote, PropertyTask
 from app.models.property import Property
 from app.schemas.acquisition import (
     NoteCreate,
@@ -51,6 +51,7 @@ async def upload_document(
         size_bytes=len(content),
     )
     db.add(record)
+    db.add(PropertyActivityEvent(property_id=property_id, event_type="document_uploaded", message=f"Document uploaded: {record.filename}"))
     db.commit()
     db.refresh(record)
     return record
@@ -85,6 +86,7 @@ def create_note(property_id: int, payload: NoteCreate, db: Session = Depends(get
     _get_property(property_id, db)
     note = PropertyNote(property_id=property_id, **payload.model_dump())
     db.add(note)
+    db.add(PropertyActivityEvent(property_id=property_id, event_type="note_added", message="Note added"))
     db.commit()
     db.refresh(note)
     return note
@@ -148,3 +150,10 @@ def _get_child(model: type, item_id: int, property_id: int, db: Session):
     if record is None or record.property_id != property_id:
         raise HTTPException(status_code=404, detail="Resource not found")
     return record
+
+
+@router.get("/activity")
+def list_activity(property_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    _get_property(property_id, db)
+    events = db.scalars(select(PropertyActivityEvent).where(PropertyActivityEvent.property_id == property_id).order_by(PropertyActivityEvent.created_at.desc()))
+    return [{"id": event.id, "event_type": event.event_type, "message": event.message, "metadata": event.metadata_, "created_at": event.created_at} for event in events]
