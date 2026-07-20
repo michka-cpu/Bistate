@@ -1,0 +1,6 @@
+// @ts-nocheck
+import { useEffect, useState } from "react"
+export function ActivityTimeline({ property }: { property: Property; notes: Note[]; documents: Document[] }) { const [events, setEvents] = useState<Array<{ id: number; event_type: string; message: string; created_at: string; metadata: Record<string, unknown> }>|null>(null); const [failed, setFailed] = useState(false); useEffect(() => { void fetch(`/api/properties/${property.id}/activity`).then(async (response) => { if (!response.ok) throw Error(); setEvents(await response.json()) }).catch(() => setFailed(true)) }, [property.id]); if (failed) return <article className="panel"><p className="muted">Activity could not be loaded.</p></article>; if (events === null) return <article className="panel"><p className="muted">Loading activity…</p></article>; if (!events.length) return <article className="panel"><p className="muted">No persisted activity yet.</p></article>; return <article className="panel timeline"><div className="panel-title"><span>Activity timeline</span></div>{events.map((event) => <div key={event.id}><b>●</b><span>{event.message}<small>{event.event_type} · {new Date(event.created_at).toLocaleString()}</small></span></div>)}</article> }
+export { PipelineProgress } from './PipelineProgress'
+export { KpiGrid } from './KPICards'
+export { AcquisitionPipeline } from './AcquisitionStages'
