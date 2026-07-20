@@ -41,6 +41,8 @@ class PropertyCreate(PropertyBase):
 
 
 class PropertyUpdate(BaseModel):
+    is_favorite: bool | None = None
+    is_pinned: bool | None = None
     name: str | None = Field(default=None, min_length=1, max_length=255)
     address: str | None = Field(default=None, min_length=1, max_length=500)
     city: str | None = Field(default=None, min_length=1, max_length=100)
@@ -73,6 +75,8 @@ class PropertyRead(PropertyBase):
     id: int
     created_at: datetime
     updated_at: datetime
+    is_favorite: bool = False
+    is_pinned: bool = False
     enrichment_data: dict[str, Any] = Field(default_factory=dict)
     underwriting_output: dict[str, Any] | None = None
     underwriting_assumptions: dict[str, Any] | None = None

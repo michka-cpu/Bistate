@@ -1,3 +1,4 @@
+from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import JSON, DateTime, Float, Integer, Numeric, String, Text, func
@@ -18,6 +19,8 @@ class Property(Base):
     state: Mapped[str] = mapped_column(String(2), nullable=False)
     postal_code: Mapped[str | None] = mapped_column(String(20))
     notes: Mapped[str | None] = mapped_column(Text())
+    is_favorite: Mapped[bool] = mapped_column(default=False, nullable=False)
+    is_pinned: Mapped[bool] = mapped_column(default=False, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="New")
     listing_source: Mapped[str | None] = mapped_column(String(100))
     listing_url: Mapped[str | None] = mapped_column(String(2000))
@@ -66,6 +69,7 @@ class Property(Base):
     internal_notes: Mapped[list["PropertyNote"]] = relationship(
         back_populates="property", cascade="all, delete-orphan", passive_deletes=True
     )
+    activity_events: Mapped[list["PropertyActivityEvent"]] = relationship(back_populates="property", cascade="all, delete-orphan", passive_deletes=True)
     tasks: Mapped[list["PropertyTask"]] = relationship(
         back_populates="property", cascade="all, delete-orphan", passive_deletes=True
     )

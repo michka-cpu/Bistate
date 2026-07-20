@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.property import Property
+from app.models.acquisition import PropertyActivityEvent
 from app.schemas.acquisition import InvestmentMemo, PropertyImport
 from app.schemas.property import PropertyRead
 from app.schemas.underwriting import UnderwritingResult
@@ -31,6 +32,7 @@ def import_property(payload: PropertyImport, db: Session = Depends(get_db)) -> P
     db.add(prop)
     db.flush()
     _run_pipeline(prop)
+    db.add(PropertyActivityEvent(property_id=prop.id, event_type="imported", message="Property imported"))
     prop.status = "Reviewing"
     db.commit()
     db.refresh(prop)
@@ -103,6 +105,7 @@ def _run_pipeline(prop: Property, refresh: bool = False) -> None:
         setattr(prop, field, value)
     prop.pipeline_state["underwrite"] = "completed"
     prop.pipeline_state["memo"] = "completed"
+    prop.activity_events.append(PropertyActivityEvent(event_type="refreshed" if refresh else "analyzed", message="Analysis completed"))
 
 
 def _get_property(property_id: int, db: Session) -> Property:

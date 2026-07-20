@@ -194,3 +194,31 @@ zone/risk, and the [Census ACS API](https://www.census.gov/data/developers/data-
 for tract demographics. Public requests use `PROVIDER_TIMEOUT_SECONDS` and bounded retries
 (`PROVIDER_RETRY_COUNT`); HTTP 429 is rate-limit aware. Disabled, malformed, timed-out, or
 rate-limited providers retain their contract key with an explicit unavailable provenance object.
+
+## Interactive property dashboard
+
+Milestone 9 adds a daily-use acquisition workspace while keeping the workbook underwriting
+engine and its calculations unchanged. The dashboard surfaces portfolio KPIs (imports, deals
+under review, average Buy Score, average IRR, highest score, and pipeline counts), pinned
+favorites, recent properties, and search across address, county, status, and imported records.
+
+Each **Property Detail** workspace provides Overview, Listing, Underwriting, Financials,
+Renovation, Airbnb, Wedding, Maps, Comparable Sales, Documents, Notes, and Activity Timeline
+sections. It includes a listing gallery with a missing-image state, live OpenStreetMap location
+view, downloadable diligence documents, and an ordered audit trail for imports, enrichment,
+analysis, notes, and uploads.
+
+### Workflow and comparison mode
+
+Use the import bar to create a property, then follow the visible background-job sequence:
+Import → Enrichment → Comparables → Workbook Underwriting → Investment Memo → Completed.
+Provider failures remain visible and can be retried without changing the workbook outputs.
+Select **Compare** beside two or more properties to open side-by-side purchase price, score,
+renovation, projected IRR, Airbnb, wedding, and cash-required comparisons. The best value in
+each metric is highlighted.
+
+### Exports
+
+Investment memos have print/PDF and copy-friendly presentation controls. The Documents area
+retains uploads and downloads; CSV property-summary and Excel-workbook-summary export actions
+are available from the workspace without modifying any underwriting calculations.
