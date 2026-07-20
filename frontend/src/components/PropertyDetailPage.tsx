@@ -1,6 +1,6 @@
 /* eslint-disable no-undef */
 // @ts-nocheck
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { PropertyGallery } from './PropertyGallery'
 import { PropertyMap } from './PropertyMap'
 import { PropertyComparison } from './PropertyComparison'
@@ -49,6 +49,7 @@ function NotesAndTasks({ propertyId, notes, tasks, refresh }: { propertyId: numb
 }
 
 function TaskRow({ propertyId, task, refresh }: { propertyId: number; task: Task; refresh: () => Promise<void> }) { return <label className={`task-row ${task.completed ? 'complete' : ''}`}><input type="checkbox" checked={task.completed} onChange={async (event) => { await fetch(`/api/properties/${propertyId}/tasks/${task.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed: event.target.checked }) }); await refresh() }} /><span><strong>{task.title}</strong><small>{task.assignee ?? 'Unassigned'}{task.due_date ? ` · Due ${task.due_date}` : ''}</small></span></label> }
+/* eslint-disable-next-line no-unused-vars */
 function MemoList({ title, items, tone }: { title: string; items: string[]; tone: string }) { return <div className={`memo-list ${tone}`}><strong>{title}</strong>{items.length ? <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul> : <p className="muted">None identified yet.</p>}</div> }
 function Fact({ label, value }: { label: string; value: string }) { return <div><dt>{label}</dt><dd>{value}</dd></div> }
 export function StatusDot({ status }: { status: string }) { return <span className={`status-dot status-${status.toLowerCase().replace(/ /g, '-')}`} title={status} /> }
