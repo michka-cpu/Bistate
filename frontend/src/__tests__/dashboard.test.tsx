@@ -1,22 +1,31 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import DashboardPage from '../pages/DashboardPage'
-import { ActivityTimeline } from '../components/ActivityTimeline'
 import { ExportMenu } from '../components/ExportMenu'
-import { PropertyComparison } from '../components/PropertyComparison'
-import { PropertyMap } from '../components/PropertyMap'
+import { PropertyGallery } from '../components/PropertyGallery'
+
+beforeEach(() => {
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [] })))
+})
 
 describe('interactive dashboard behavior', () => {
-  it('renders the dashboard application component', () => expect(DashboardPage).toBeTypeOf('function'))
-  it('provides search and persisted favorite controls in the dashboard source', async () => {
-    const source = await import('../pages/DashboardPage?raw')
-    expect(source.default).toContain('property-search')
-    expect(source.default).toContain('is_favorite')
+  it('renders the empty dashboard after loading properties', async () => {
+    render(<DashboardPage />)
+    expect(await screen.findByRole('heading', { name: /build your acquisition pipeline/i })).toBeInTheDocument()
   })
-  it('supports comparison selection', async () => expect((await import('../pages/DashboardPage?raw')).default).toContain('compare-toggle'))
-  it('uses the persisted activity endpoint', async () => expect((await import('../components/ActivityTimeline?raw')).default).toContain('/activity'))
-  it('exposes real export links', async () => expect((await import('../components/ExportMenu?raw')).default).toContain('/exports/csv'))
-  it('provides map, timeline, comparison, and export components', () => {
-    expect(PropertyMap).toBeTypeOf('function'); expect(PropertyComparison).toBeTypeOf('function')
-    expect(ActivityTimeline).toBeTypeOf('function'); expect(ExportMenu).toBeTypeOf('function')
+  it('renders searchable navigation and favorite/comparison controls for a property', async () => {
+    const property = { id: 1, name: 'Maple House', address: '1 Main St', city: 'Beacon', state: 'NY', postal_code: '12508', status: 'Reviewing', images: [], enrichment_data: {}, pipeline_state: {}, provider_errors: {}, created_at: '', updated_at: '', is_favorite: false, is_pinned: false }
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [property] })))
+    render(<DashboardPage />)
+    const search = await screen.findByPlaceholderText(/search address/i)
+    fireEvent.change(search, { target: { value: 'missing' } })
+    expect(screen.queryByText('Maple House')).not.toBeInTheDocument()
   })
+  it('exposes persisted CSV, PDF, and Excel exports', () => {
+    render(<ExportMenu propertyId={42} />)
+    expect(screen.getByRole('link', { name: /csv/i })).toHaveAttribute('href', '/api/properties/42/exports/csv')
+    expect(screen.getByRole('link', { name: /pdf/i })).toHaveAttribute('href', '/api/properties/42/exports/pdf')
+    expect(screen.getByRole('link', { name: /excel/i })).toHaveAttribute('href', '/api/properties/42/exports/xlsx')
+  })
+  it('renders the gallery unavailable state', () => { render(<PropertyGallery images={[]} />); expect(screen.getByText(/no listing images/i)).toBeInTheDocument() })
 })

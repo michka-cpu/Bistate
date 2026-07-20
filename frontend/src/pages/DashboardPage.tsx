@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
-import { AcquisitionPipeline, Dashboard, KpiGrid, PipelineProgress, TabContent, StatusDot, EmptyState } from '../components/PropertyDetailPage'
+import { Dashboard, TabContent, StatusDot, EmptyState } from '../components/PropertyDetailPage'
+import { AcquisitionPipeline } from '../components/AcquisitionStages'
+import { KpiGrid } from '../components/KPICards'
+import { PipelineProgress } from '../components/PipelineProgress'
 import type { FormEvent } from 'react'
 
 type EnrichmentField = { value: unknown; source: string; last_updated: string; confidence: number; missing_reason?: string | null }
