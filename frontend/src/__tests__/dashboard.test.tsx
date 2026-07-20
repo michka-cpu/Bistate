@@ -22,7 +22,10 @@ describe('interactive dashboard behavior', () => {
     const search = await screen.findByPlaceholderText(/search address/i)
     await user.clear(search)
     await user.type(search, 'missing')
-    await waitFor(() => { expect(screen.queryByText('Maple House')).not.toBeInTheDocument() })
+    await waitFor(() => {
+      expect(search).toHaveValue('missing')
+      expect(screen.queryByRole('button', { name: /maple house/i })).not.toBeInTheDocument()
+    })
   })
   it('exposes persisted CSV, PDF, and Excel exports', () => {
     render(<ExportMenu propertyId={42} />)
