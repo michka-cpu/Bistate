@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import DashboardPage from '../pages/DashboardPage'
 import { ExportMenu } from '../components/ExportMenu'
 import { PropertyGallery } from '../components/PropertyGallery'
@@ -17,9 +18,11 @@ describe('interactive dashboard behavior', () => {
     const property = { id: 1, name: 'Maple House', address: '1 Main St', city: 'Beacon', state: 'NY', postal_code: '12508', status: 'Reviewing', images: [], enrichment_data: {}, pipeline_state: {}, provider_errors: {}, created_at: '', updated_at: '', is_favorite: false, is_pinned: false }
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [property] })))
     render(<DashboardPage />)
+    const user = userEvent.setup()
     const search = await screen.findByPlaceholderText(/search address/i)
-    fireEvent.change(search, { target: { value: 'missing' } })
-    expect(screen.queryByText('Maple House')).not.toBeInTheDocument()
+    await user.clear(search)
+    await user.type(search, 'missing')
+    await waitFor(() => { expect(screen.queryByText('Maple House')).not.toBeInTheDocument() })
   })
   it('exposes persisted CSV, PDF, and Excel exports', () => {
     render(<ExportMenu propertyId={42} />)
