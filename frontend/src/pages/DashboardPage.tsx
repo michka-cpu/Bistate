@@ -50,7 +50,11 @@ export default function DashboardPage() {
   async function loadProperties(preferredId?: number) {
     const response = await fetch('/api/properties')
     if (!response.ok) throw new Error('Unable to load the acquisition pipeline.')
-    const data = await response.json() as Property[]
+    const payload = await response.json() as unknown
+    // Older records and unavailable providers can legitimately omit collections.
+    // Treat any non-list response as an empty pipeline instead of letting the UI
+    // fail while it is trying to render a recoverable state.
+    const data = Array.isArray(payload) ? payload as Property[] : []
     setProperties(data)
     setSelectedId(preferredId ?? selectedId ?? data[0]?.id ?? null)
   }
@@ -60,9 +64,14 @@ export default function DashboardPage() {
       fetch(`/api/properties/${propertyId}/notes`), fetch(`/api/properties/${propertyId}/tasks`),
       fetch(`/api/properties/${propertyId}/documents`), fetch(`/api/properties/${propertyId}/report`),
     ])
-    setNotes(notesResponse.ok ? await notesResponse.json() as Note[] : [])
-    setTasks(tasksResponse.ok ? await tasksResponse.json() as Task[] : [])
-    setDocuments(documentsResponse.ok ? await documentsResponse.json() as Document[] : [])
+    const listOrEmpty = async <T,>(response: Response): Promise<T[]> => {
+      if (!response.ok) return []
+      const payload = await response.json() as unknown
+      return Array.isArray(payload) ? payload as T[] : []
+    }
+    setNotes(await listOrEmpty<Note>(notesResponse))
+    setTasks(await listOrEmpty<Task>(tasksResponse))
+    setDocuments(await listOrEmpty<Document>(documentsResponse))
     setMemo(memoResponse.ok ? await memoResponse.json() as Memo : null)
   }
 
@@ -131,4 +140,3 @@ export default function DashboardPage() {
     </div>
   )
 }
-

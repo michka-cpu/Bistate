@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -18,6 +19,18 @@ router = APIRouter(prefix="/properties", tags=["acquisition"])
 @router.post("/import", response_model=PropertyRead, status_code=status.HTTP_201_CREATED)
 def import_property(payload: PropertyImport, db: Session = Depends(get_db)) -> Property:
     listing = normalize_listing(payload)
+    duplicate = db.scalar(
+        select(Property).where(
+            or_(
+                Property.listing_url == listing.listing_url if listing.listing_url else False,
+                (Property.address.ilike(listing.address))
+                & (Property.city.ilike(listing.city))
+                & (Property.state.ilike(listing.state)),
+            )
+        )
+    )
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail=f"Property already exists (id={duplicate.id})")
     prop = Property(
         name=listing.name,
         address=listing.address,

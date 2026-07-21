@@ -154,7 +154,14 @@ def enrich_property(prop: Property, refresh: bool = False) -> tuple[dict[str, di
     for provider in PROVIDERS:
         cached = previous.get(provider.key)
         if cached and not refresh and not is_stale(cached): output[provider.key] = cached; continue
-        try: output[provider.key] = provider.fetch(prop)
+        try:
+            result = provider.fetch(prop)
+            # Keep provider provenance even when a connector is intentionally
+            # unavailable, so users can distinguish unavailable data from a
+            # missing enrichment field.
+            if result.get("source") is None:
+                result["source"] = provider.source
+            output[provider.key] = result
         except Exception as exc:
             logger.warning("enrichment_provider_failed", extra={"provider": provider.key, "property_id": prop.id, "error": str(exc)})
             output[provider.key] = unavailable(str(exc) if isinstance(exc, ProviderError) else "Provider request failed")
