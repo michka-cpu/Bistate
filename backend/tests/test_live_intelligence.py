@@ -45,6 +45,24 @@ def test_google_routing_and_places_are_persisted_with_provenance(monkeypatch) ->
         assert data[key]["value"]["drive_time_minutes"] == 20
 
 
+def test_provider_http_responses_are_cached(monkeypatch) -> None:
+    from app.services import enrichment
+
+    class Response:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def read(self): return b'{"value": "cached"}'
+
+    calls = []
+    monkeypatch.setattr(enrichment.get_settings(), "provider_cache_seconds", 60)
+    monkeypatch.setattr(enrichment, "urlopen", lambda *_args, **_kwargs: calls.append(1) or Response())
+    client = enrichment.JsonHttpClient()
+
+    assert client.get("https://provider.example/data", {"q": "Ghent"}) == {"value": "cached"}
+    assert client.get("https://provider.example/data", {"q": "Ghent"}) == {"value": "cached"}
+    assert len(calls) == 1
+
+
 def test_provider_failure_retains_existing_live_fact(monkeypatch) -> None:
     from app.services import enrichment
     prop = Property(name="Ghent", address="139 County Route 21C", city="Ghent", state="NY")
