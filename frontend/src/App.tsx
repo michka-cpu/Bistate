@@ -1,4 +1,8 @@
+import { useState } from 'react'
 import DashboardPage from './pages/DashboardPage'
+import SearchPage from './pages/SearchPage'
 
-/** Application shell; route providers belong here as routes are introduced. */
-export default function App() { return <DashboardPage /> }
+export default function App() {
+  const [page, setPage] = useState<'search' | 'pipeline'>('search')
+  return page === 'search' ? <SearchPage onPipeline={() => setPage('pipeline')} /> : <DashboardPage />
+}
