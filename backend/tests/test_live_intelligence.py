@@ -17,6 +17,7 @@ def test_unconfigured_enrichment_has_provenance_and_explicit_missing_reason() ->
     assert data["fema_flood"]["value"] is None
     assert data["fema_flood"]["missing_reason"]
     assert set(data["fema_flood"]) == {"value", "source", "confidence", "last_updated", "missing_reason"}
+    assert data["fema_flood"]["source"] == "FEMA National Flood Hazard Layer"
 
 
 def test_stale_data_detection() -> None:

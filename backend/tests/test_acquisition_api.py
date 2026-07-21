@@ -31,6 +31,14 @@ def test_import_requires_an_identifier(client: TestClient) -> None:
     assert client.post("/api/properties/import", json={}).status_code == 422
 
 
+def test_import_rejects_normalized_duplicate_address(client: TestClient) -> None:
+    payload = {"raw_address": "139 County Route 21C, Ghent, NY"}
+    assert client.post("/api/properties/import", json=payload).status_code == 201
+    duplicate = client.post("/api/properties/import", json={"raw_address": "139 COUNTY ROUTE 21C, GHENT, ny"})
+    assert duplicate.status_code == 409
+    assert "already exists" in duplicate.json()["detail"]
+
+
 def test_refresh_enrichment_underwriting_and_report(client: TestClient) -> None:
     prop = client.post("/api/properties/import", json={"raw_address": "8 River Rd, Hudson, NY 12534"}).json()
     property_id = prop["id"]
