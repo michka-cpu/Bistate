@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     live_providers_enabled: bool = False
     provider_timeout_seconds: float = 8
     provider_retry_count: int = 2
+    provider_cache_seconds: int = 3600
     fema_api_url: str | None = None
     census_api_key: str | None = None
     assessor_api_key: str | None = None

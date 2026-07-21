@@ -7,7 +7,7 @@ export default [
   { ignores: ['dist'] },
   {
     files: ['**/*.{ts,tsx}'],
-    languageOptions: { parser: tseslint.parser, ecmaVersion: 2020, globals: { window: 'readonly', document: 'readonly', fetch: 'readonly', FormData: 'readonly', HTMLInputElement: 'readonly' } },
+    languageOptions: { parser: tseslint.parser, ecmaVersion: 2020, globals: { window: 'readonly', document: 'readonly', fetch: 'readonly', Response: 'readonly', FormData: 'readonly', HTMLInputElement: 'readonly' } },
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
     rules: { ...js.configs.recommended.rules, ...reactHooks.configs.recommended.rules, 'react-refresh/only-export-components': ['warn', { allowConstantExport: true }] },
   },

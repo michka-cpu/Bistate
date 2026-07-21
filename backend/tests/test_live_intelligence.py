@@ -16,7 +16,43 @@ def test_unconfigured_enrichment_has_provenance_and_explicit_missing_reason() ->
     assert not errors
     assert data["fema_flood"]["value"] is None
     assert data["fema_flood"]["missing_reason"]
-    assert set(data["fema_flood"]) == {"value", "source", "confidence", "last_updated", "missing_reason"}
+    assert set(data["fema_flood"]) == {"value", "source", "retrieval_status", "confidence", "last_updated", "missing_reason"}
+    assert data["fema_flood"]["source"] == "FEMA National Flood Hazard Layer"
+
+
+def test_google_routing_and_places_are_persisted_with_provenance(monkeypatch) -> None:
+    from app.services import enrichment
+
+    settings = enrichment.get_settings()
+    monkeypatch.setattr(settings, "live_providers_enabled", True)
+    monkeypatch.setattr(settings, "routing_api_key", "routing-key")
+    monkeypatch.setattr(settings, "places_api_key", "places-key")
+
+    def response(url, params):
+        if "directions" in url:
+            return {"status": "OK", "routes": [{"legs": [{"distance": {"value": 16093, "text": "10 mi"}, "duration": {"value": 1200, "text": "20 mins"}}]}]}
+        return {"status": "OK", "results": [{"name": "Hudson Amtrak", "vicinity": "Hudson, NY", "place_id": "place-1", "geometry": {"location": {"lat": 42.25, "lng": -73.8}}}]}
+
+    monkeypatch.setattr(enrichment.HTTP, "get", response)
+    prop = Property(name="Ghent", address="139 County Route 21C", city="Ghent", state="NY", latitude=42.2, longitude=-73.6)
+    data, errors = enrichment.enrich_property(prop)
+
+    assert not errors
+    assert data["nyc_drive_time"]["retrieval_status"] == "live"
+    assert data["nyc_drive_time"]["value"]["distance_miles"] == 10.0
+    for key in ("nearest_amtrak", "restaurant_hub", "nearest_airport", "hospital_distance", "grocery_distance"):
+        assert data[key]["source"] == "Google Places API"
+        assert data[key]["value"]["drive_time_minutes"] == 20
+
+
+def test_provider_failure_retains_existing_live_fact(monkeypatch) -> None:
+    from app.services import enrichment
+    prop = Property(name="Ghent", address="139 County Route 21C", city="Ghent", state="NY")
+    prop.enrichment_data = {"fema_flood": {"value": {"flood_zone": "X"}, "source": "FEMA", "retrieval_status": "live", "confidence": 0.9, "last_updated": "2000-01-01T00:00:00+00:00", "missing_reason": None}}
+    monkeypatch.setattr(enrichment.FemaFloodProvider, "fetch", lambda *_: (_ for _ in ()).throw(enrichment.ProviderError("temporary failure")))
+    data, errors = enrichment.enrich_property(prop, refresh=True)
+    assert data["fema_flood"]["value"] == {"flood_zone": "X"}
+    assert errors["fema_flood"]["message"] == "temporary failure"
 
 
 def test_stale_data_detection() -> None:

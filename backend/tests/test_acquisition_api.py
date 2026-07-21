@@ -24,11 +24,19 @@ def test_import_runs_enrichment_and_underwriting_pipeline(client: TestClient) ->
         "airbnb_suitability", "zoning", "parcel_information",
     }
     for field in prop["enrichment_data"].values():
-        assert set(field) == {"value", "source", "last_updated", "confidence", "missing_reason"}
+        assert set(field) == {"value", "source", "retrieval_status", "last_updated", "confidence", "missing_reason"}
 
 
 def test_import_requires_an_identifier(client: TestClient) -> None:
     assert client.post("/api/properties/import", json={}).status_code == 422
+
+
+def test_import_rejects_normalized_duplicate_address(client: TestClient) -> None:
+    payload = {"raw_address": "139 County Route 21C, Ghent, NY"}
+    assert client.post("/api/properties/import", json=payload).status_code == 201
+    duplicate = client.post("/api/properties/import", json={"raw_address": "139 COUNTY ROUTE 21C, GHENT, ny"})
+    assert duplicate.status_code == 409
+    assert "already exists" in duplicate.json()["detail"]
 
 
 def test_refresh_enrichment_underwriting_and_report(client: TestClient) -> None:
