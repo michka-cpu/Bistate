@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { AcquisitionPipeline, Dashboard, KpiGrid, PipelineProgress, TabContent, StatusDot, EmptyState } from '../components/PropertyDetailPage'
 import type { FormEvent } from 'react'
 
-type EnrichmentField = { value: unknown; source: string; last_updated: string; confidence: number; missing_reason?: string | null }
+type EnrichmentField = { value: unknown; source: string; retrieval_status?: 'live' | 'unavailable'; last_updated: string | null; confidence: number; missing_reason?: string | null }
 type Underwriting = {
   dashboard: Record<string, number>
   renovation: Record<string, unknown>

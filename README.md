@@ -173,11 +173,12 @@ workbook underwriting → investment memo persistence**. Refresh all refreshable
 Provider modules are independently configured by `FEMA_API_URL`, `CENSUS_API_KEY`,
 `ASSESSOR_API_KEY`, `PARCEL_API_KEY`, `SCHOOLS_API_KEY`, `ZONING_API_KEY`,
 `STR_REGULATIONS_API_KEY`, `ROUTING_API_KEY`, `PLACES_API_KEY`, `WALKSCORE_API_KEY`, and
-`AIRDNA_API_KEY`. Configure `PROVIDER_TIMEOUT_SECONDS` and `PROVIDER_RETRY_COUNT` for future
+`AIRDNA_API_KEY`. Configure `PROVIDER_TIMEOUT_SECONDS`, `PROVIDER_RETRY_COUNT`, and
+`PROVIDER_CACHE_SECONDS` for future
 network connectors. `GET /api/properties/providers/health` exposes configuration health.
 
-Every enrichment result includes `value`, `source`, `confidence`, `last_updated`, and
-`missing_reason`. Results are cached until 30 days old; stale records are re-fetched by the
+Every enrichment result includes `value`, `source`, `retrieval_status`, `confidence`,
+`last_updated`, and `missing_reason`. Results are cached until 30 days old; stale records are re-fetched by the
 pipeline. Provider errors are isolated and saved on the property, so partial results and the
 workbook analysis remain available. FEMA, Census, assessor/parcel, schools, zoning, STR rules,
 routing/places, Walk Score, Airbnb market data, and comparable sales currently require a
@@ -194,6 +195,20 @@ zone/risk, and the [Census ACS API](https://www.census.gov/data/developers/data-
 for tract demographics. Public requests use `PROVIDER_TIMEOUT_SECONDS` and bounded retries
 (`PROVIDER_RETRY_COUNT`); HTTP 429 is rate-limit aware. Disabled, malformed, timed-out, or
 rate-limited providers retain their contract key with an explicit unavailable provenance object.
+
+### Google routing and places milestone
+
+With `LIVE_PROVIDERS_ENABLED=true`, configure `ROUTING_API_KEY` with Google Maps **Directions
+API** access and `PLACES_API_KEY` with Google Maps **Places API** access. The routing provider
+stores a live `nyc_drive_time` fact with distance and driving duration. The places provider stores
+`nearest_amtrak`, `restaurant_hub`, `nearest_airport`, `hospital_distance`, and `grocery_distance`.
+Each place fact includes the provider-returned name, address, place ID, coordinates, route distance,
+and route duration when the routing key is also configured. A missing key, no result, or provider
+failure remains an explicit `retrieval_status: unavailable` fact; no proximity data is estimated.
+Successful provider HTTP responses are cached for `PROVIDER_CACHE_SECONDS` (one hour by default)
+to limit quota use. Restaurant results are labelled as a provider-returned **restaurant hub candidate**,
+not a market-demand score; Airbnb, wedding, personal-use, and investment scores remain derived
+model outputs rather than live provider facts.
 
 ## Interactive property dashboard
 
