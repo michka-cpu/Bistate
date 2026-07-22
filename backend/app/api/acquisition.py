@@ -12,6 +12,7 @@ from app.services.acquisition import build_investment_memo, underwrite_property
 from app.services.enrichment import enrich_property, provider_health
 from app.services.listing_providers import normalize_listing
 from app.services.comparables import collect_comparables
+from app.services.valuation import value_property
 
 router = APIRouter(prefix="/properties", tags=["acquisition"])
 
@@ -110,6 +111,8 @@ def _run_pipeline(prop: Property, refresh: bool = False) -> None:
     for comparable in collect_comparables(prop):
         prop.comparable_properties.append(comparable)
     prop.pipeline_state["comparables"] = "completed"
+    # Valuation is retained as explainability; calibrated underwriting scores are unchanged.
+    prop.valuation_data = value_property(prop)
     prop.pipeline_state["underwrite"] = "running"
     package = underwrite_property(prop)
     prop.underwriting_output = package["output"]

@@ -28,6 +28,8 @@ class Property(Base):
     latitude: Mapped[float | None] = mapped_column(Float())
     longitude: Mapped[float | None] = mapped_column(Float())
     county: Mapped[str | None] = mapped_column(String(150))
+    property_type: Mapped[str | None] = mapped_column(String(100))
+    valuation_data: Mapped[dict] = mapped_column(JSON(), nullable=False, default=dict)
     acreage: Mapped[float | None] = mapped_column(Float())
     bedrooms: Mapped[float | None] = mapped_column(Float())
     bathrooms: Mapped[float | None] = mapped_column(Float())

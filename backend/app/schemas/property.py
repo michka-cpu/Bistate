@@ -21,6 +21,7 @@ class PropertyBase(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     county: str | None = None
+    property_type: str | None = None
     acreage: float | None = Field(default=None, ge=0)
     bedrooms: float | None = Field(default=None, ge=0)
     bathrooms: float | None = Field(default=None, ge=0)
@@ -56,6 +57,7 @@ class PropertyUpdate(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     county: str | None = None
+    property_type: str | None = None
     acreage: float | None = Field(default=None, ge=0)
     bedrooms: float | None = Field(default=None, ge=0)
     bathrooms: float | None = Field(default=None, ge=0)
@@ -88,5 +90,6 @@ class PropertyRead(PropertyBase):
     confidence_score: float | None = None
     pipeline_state: dict[str, Any] = Field(default_factory=dict)
     provider_errors: dict[str, Any] = Field(default_factory=dict)
+    valuation_data: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(from_attributes=True)

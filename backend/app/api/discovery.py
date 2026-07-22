@@ -41,7 +41,7 @@ def analyze_listing(listing_id: int, db: Session = Depends(get_db)) -> Property:
     listing = _listing_or_404(listing_id, db)
     duplicate = db.scalar(select(Property).where(Property.listing_url == listing.listing_url))
     if duplicate: raise HTTPException(status_code=409, detail=f"Property already exists (id={duplicate.id})")
-    prop = Property(name=listing.address, address=listing.address, city=listing.city, state=listing.state, postal_code=listing.postal_code, county=listing.county, asking_price=listing.asking_price, acreage=listing.acreage, bedrooms=listing.bedrooms, bathrooms=listing.bathrooms, listing_source=listing.listing_source, listing_url=listing.listing_url, images=[listing.photo_url] if listing.photo_url else [], status="Underwriting")
+    prop = Property(name=listing.address, address=listing.address, city=listing.city, state=listing.state, postal_code=listing.postal_code, county=listing.county, property_type=listing.property_type, asking_price=listing.asking_price, acreage=listing.acreage, bedrooms=listing.bedrooms, bathrooms=listing.bathrooms, listing_source=listing.listing_source, listing_url=listing.listing_url, images=[listing.photo_url] if listing.photo_url else [], status="Underwriting")
     db.add(prop); db.flush(); _run_pipeline(prop); db.add(PropertyActivityEvent(property_id=prop.id, event_type="imported", message="Property imported from discovery")); prop.status = "Reviewing"; db.commit(); db.refresh(prop); return prop
 
 

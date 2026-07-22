@@ -1,0 +1,4 @@
+import { expect, test } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import { TabContent } from '../components/PropertyDetailPage'
+test('renders valuation summary and adjustment table', () => { render(<TabContent tab="Valuation" property={{ asking_price: 500000 }} valuation={{ estimated_value: 550000, value_range: { low: 530000, high: 560000 }, confidence_score: 85, pricing_signal: 'Undervalued', discount_premium: 50000, percent_difference: 10, explanation: 'Weighted comparison.', comparables: [{ id: 1, address: '2 Main', sale_price: 550000, distance_miles: 1, sale_date: '2026-07-01', similarity_score: 92, adjustments: [] }] }} properties={[]} memo={null} notes={[]} tasks={[]} documents={[]} refresh={async () => {}} />); expect(screen.getByText('Market valuation')).toBeInTheDocument(); expect(screen.getByText('Undervalued')).toBeInTheDocument(); expect(screen.getByText('2 Main')).toBeInTheDocument() })

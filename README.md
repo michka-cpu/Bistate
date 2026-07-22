@@ -237,3 +237,9 @@ each metric is highlighted.
 Investment memos have print/PDF and copy-friendly presentation controls. The Documents area
 retains uploads and downloads; CSV property-summary and Excel-workbook-summary export actions
 are available from the workspace without modifying any underwriting calculations.
+
+## Comparable sales & valuation
+
+`GET /api/properties/{property_id}/valuation` returns the cached comparable-sales valuation for an analyzed property. Use `POST /api/properties/{property_id}/valuation/search` with `radius_miles` and `sold_within_days` to run a configurable search over verified, separately persisted comparable records. The response contains each comparable's source provenance, weighted similarity score, distance, sale date, and feature adjustments, alongside estimated value, range, confidence, and an **Overpriced**, **Fair Value**, or **Undervalued** explainability signal.
+
+Comparable records require a licensed sales-data connector and remain unavailable until one returns verified data; Bistate never invents sales. The valuation is an explainability layer only and does not change the calibrated underwriting score weights.
