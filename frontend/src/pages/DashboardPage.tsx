@@ -24,9 +24,10 @@ type Property = {
 type Note = { id: number; body: string; author: string | null; created_at: string }
 type Task = { id: number; title: string; assignee: string | null; due_date: string | null; completed: boolean }
 type Document = { id: number; filename: string; document_type: string; size_bytes: number }
+type Valuation = { estimated_value: number | null; value_range: { low: number; high: number } | null; confidence_score: number; pricing_signal: string; discount_premium: number | null; percent_difference: number | null; comparables: Array<Record<string, unknown>>; explanation: string }
 type Memo = { executive_summary: string; strengths: string[]; weaknesses: string[]; risks: string[]; comparable_properties: Array<Record<string, unknown>>; missing_information: string[] }
 
-const tabs = ['Overview', 'Listing', 'Financials', 'Underwriting', 'Renovation', 'Airbnb', 'Wedding', 'Maps', 'Comparable Sales', 'Documents', 'Notes', 'Activity Timeline'] as const
+const tabs = ['Overview', 'Listing', 'Financials', 'Underwriting', 'Renovation', 'Airbnb', 'Wedding', 'Maps', 'Comparable Sales', 'Valuation', 'Documents', 'Notes', 'Activity Timeline'] as const
 const statuses = ['New', 'Reviewing', 'Underwriting', 'Needs Info', 'Approved', 'Rejected', 'Under Contract', 'Closed']
 type Tab = typeof tabs[number]
 
@@ -41,6 +42,7 @@ export default function DashboardPage() {
   const [tasks, setTasks] = useState<Task[]>([])
   const [documents, setDocuments] = useState<Document[]>([])
   const [memo, setMemo] = useState<Memo | null>(null)
+  const [valuation, setValuation] = useState<Valuation | null>(null)
   const [search, setSearch] = useState('')
   const [comparison, setComparison] = useState<number[]>([])
 
@@ -60,9 +62,9 @@ export default function DashboardPage() {
   }
 
   async function loadWorkspace(propertyId: number) {
-    const [notesResponse, tasksResponse, documentsResponse, memoResponse] = await Promise.all([
+    const [notesResponse, tasksResponse, documentsResponse, memoResponse, valuationResponse] = await Promise.all([
       fetch(`/api/properties/${propertyId}/notes`), fetch(`/api/properties/${propertyId}/tasks`),
-      fetch(`/api/properties/${propertyId}/documents`), fetch(`/api/properties/${propertyId}/report`),
+      fetch(`/api/properties/${propertyId}/documents`), fetch(`/api/properties/${propertyId}/report`), fetch(`/api/properties/${propertyId}/valuation`),
     ])
     const listOrEmpty = async <T,>(response: Response): Promise<T[]> => {
       if (!response.ok) return []
@@ -73,6 +75,7 @@ export default function DashboardPage() {
     setTasks(await listOrEmpty<Task>(tasksResponse))
     setDocuments(await listOrEmpty<Document>(documentsResponse))
     setMemo(memoResponse.ok ? await memoResponse.json() as Memo : null)
+    setValuation(valuationResponse.ok ? await valuationResponse.json() as Valuation : null)
   }
 
   // The initial pipeline load should run once; later mutations refresh it explicitly.
@@ -134,7 +137,7 @@ export default function DashboardPage() {
           <PipelineProgress property={selected} onRetry={() => void fetch(`/api/properties/${selected.id}/refresh`, { method: 'POST' }).then(() => loadProperties(selected.id))} />
           <AcquisitionPipeline property={selected} />
           <nav className="tabs" aria-label="Property sections">{tabs.map((tab) => <button key={tab} className={activeTab === tab ? 'active' : ''} onClick={() => setActiveTab(tab)}>{tab}</button>)}</nav>
-          <section className="tab-content"><TabContent tab={activeTab} property={selected} properties={properties.filter((item) => comparison.includes(item.id))} memo={memo} notes={notes} tasks={tasks} documents={documents as never} refresh={() => loadWorkspace(selected.id)} /></section>
+          <section className="tab-content"><TabContent tab={activeTab} property={selected} properties={properties.filter((item) => comparison.includes(item.id))} memo={memo} notes={notes} tasks={tasks} documents={documents as never} valuation={valuation} refresh={() => loadWorkspace(selected.id)} /></section>
         </> : <EmptyState />}
       </main>
     </div>
