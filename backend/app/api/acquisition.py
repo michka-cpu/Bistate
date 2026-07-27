@@ -10,6 +10,7 @@ from app.schemas.property import PropertyRead
 from app.schemas.underwriting import UnderwritingResult
 from app.services.acquisition import build_investment_memo, underwrite_property
 from app.services.enrichment import enrich_property, provider_health
+from app.services.property_intelligence import build_property_intelligence
 from app.services.listing_providers import normalize_listing
 from app.services.comparables import collect_comparables
 from app.services.valuation import value_property
@@ -96,6 +97,12 @@ def refresh_analysis(property_id: int, db: Session = Depends(get_db)) -> Propert
 @router.get("/providers/health")
 def get_provider_health() -> list[dict]:
     return provider_health()
+
+
+@router.get("/{property_id}/intelligence")
+def get_property_intelligence(property_id: int, db: Session = Depends(get_db)) -> dict:
+    """Return coverage and explainability without changing underwriting output."""
+    return build_property_intelligence(_get_property(property_id, db))
 
 
 def _run_pipeline(prop: Property, refresh: bool = False) -> None:
