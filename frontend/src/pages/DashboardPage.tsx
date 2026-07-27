@@ -27,7 +27,7 @@ type Document = { id: number; filename: string; document_type: string; size_byte
 type Valuation = { estimated_value: number | null; value_range: { low: number; high: number } | null; confidence_score: number; pricing_signal: string; discount_premium: number | null; percent_difference: number | null; comparables: Array<Record<string, unknown>>; explanation: string }
 type Memo = { executive_summary: string; strengths: string[]; weaknesses: string[]; risks: string[]; comparable_properties: Array<Record<string, unknown>>; missing_information: string[] }
 
-const tabs = ['Overview', 'Listing', 'Financials', 'Underwriting', 'Renovation', 'Airbnb', 'Wedding', 'Maps', 'Comparable Sales', 'Valuation', 'Documents', 'Notes', 'Activity Timeline'] as const
+const tabs = ['Overview', 'Property Intelligence', 'Listing', 'Financials', 'Underwriting', 'Renovation', 'Airbnb', 'Wedding', 'Maps', 'Comparable Sales', 'Valuation', 'Documents', 'Notes', 'Activity Timeline'] as const
 const statuses = ['New', 'Reviewing', 'Underwriting', 'Needs Info', 'Approved', 'Rejected', 'Under Contract', 'Closed']
 type Tab = typeof tabs[number]
 

@@ -243,3 +243,41 @@ are available from the workspace without modifying any underwriting calculations
 `GET /api/properties/{property_id}/valuation` returns the cached comparable-sales valuation for an analyzed property. Use `POST /api/properties/{property_id}/valuation/search` with `radius_miles` and `sold_within_days` to run a configurable search over verified, separately persisted comparable records. The response contains each comparable's source provenance, weighted similarity score, distance, sale date, and feature adjustments, alongside estimated value, range, confidence, and an **Overpriced**, **Fair Value**, or **Undervalued** explainability signal.
 
 Comparable records require a licensed sales-data connector and remain unavailable until one returns verified data; Bistate never invents sales. The valuation is an explainability layer only and does not change the calibrated underwriting score weights.
+
+## Property Intelligence and due diligence
+
+Every analyzed property includes a **Property Intelligence** tab. It groups only stored
+property facts and existing enrichment-provider results into access, land/environment,
+infrastructure, regulatory, and financial/civic sections. Each field exposes its value,
+source, retrieval state, confidence, update time, and missing reason. `Verified`, `Available`,
+`Unavailable`, `Provider not configured`, `Needs manual review`, and `Stale` labels distinguish
+facts from gaps; a null value is never inferred or estimated.
+
+`GET /api/properties/{id}/intelligence` returns the same read-only view, including factual red
+flags, separately supported opportunities, and Data Completeness. Completeness is the count of
+populated displayed fields divided by all displayed fields. It measures information coverage—not
+property quality—and is never an underwriting input. Use the tab's refresh button or
+`POST /api/properties/{id}/enrich`; both use the established enrichment pipeline.
+
+Provider diagnostics at `GET /api/properties/providers/health` report configured and enabled
+state, last success/failure, in-process cache state, observed latency, and a safe missing-setting
+reason. Values of credentials and secrets are never returned. See `backend/.env.example` for
+settings. Run `cd backend && pytest -q` and `cd frontend && npm test && npm run build` to verify
+the intelligence derivations, refresh behavior, provider isolation, and web presentation.
+
+### Provider capability audit
+
+| Contract | Current state | Configuration / behavior |
+| --- | --- | --- |
+| Census geocoding and ACS | Live public adapter | Requires `LIVE_PROVIDERS_ENABLED`; no credential required. |
+| FEMA NFHL flood zone/risk | Live public adapter | Requires `LIVE_PROVIDERS_ENABLED`; no credential required. |
+| Google routing and Places (NYC, train, airport, restaurant, grocery, hospital) | Live credential-dependent adapters | `ROUTING_API_KEY` and/or `PLACES_API_KEY`. |
+| Assessor, parcel, schools, zoning, STR, Walk Score, AirDNA | Stable placeholder contracts | Credential settings are recognized; an approved live connector is still required. |
+| Comparable sales | Licensed-provider contract and separate cache | Unavailable until an approved adapter returns verified sales. |
+| Wetlands, slopes, protected/conservation land, utilities, event rules, historic/permits, tax/assessment history | Manual-review fields | No live provider result is claimed; the intelligence view keeps these explicit until an existing contract is extended. |
+| Stored acreage, taxes, HOA, listing facts | Available stored facts | Source remains the listing/property record and confidence is not promoted to verified. |
+
+Provider HTTP responses use the existing in-process TTL cache (`PROVIDER_CACHE_SECONDS`), while
+persisted enrichment facts are reused until the existing 30-day stale threshold. The refresh and
+health routes are shared with the acquisition workflow; Property Intelligence introduces no
+parallel cache, provider registry, or database model.

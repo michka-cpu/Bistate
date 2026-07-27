@@ -69,6 +69,7 @@ class JsonHttpClient:
 
 
 HTTP = JsonHttpClient()
+PROVIDER_DIAGNOSTICS: dict[str, dict[str, Any]] = {}
 
 
 class Provider(Protocol):
@@ -229,6 +230,7 @@ def enrich_property(prop: Property, refresh: bool = False) -> tuple[dict[str, di
     for provider in PROVIDERS:
         cached = previous.get(provider.key)
         if cached and not refresh and not is_stale(cached): output[provider.key] = cached; continue
+        started = time.monotonic()
         try:
             result = provider.fetch(prop)
             # Keep provider provenance even when a connector is intentionally
@@ -237,15 +239,35 @@ def enrich_property(prop: Property, refresh: bool = False) -> tuple[dict[str, di
             if result.get("source") is None:
                 result["source"] = provider.source
             output[provider.key] = result
+            diagnostic = PROVIDER_DIAGNOSTICS.setdefault(provider.key, {})
+            diagnostic["latency_ms"] = round((time.monotonic() - started) * 1000, 1)
+            if result.get("value") is not None:
+                diagnostic["most_recent_success"] = result.get("last_updated")
         except Exception as exc:
             logger.warning("enrichment_provider_failed", extra={"provider": provider.key, "property_id": prop.id, "error": str(exc)})
             # A transient provider failure must not destroy a previously persisted
             # live fact; retain it and expose the failure separately on the record.
             output[provider.key] = cached if cached else unavailable(str(exc) if isinstance(exc, ProviderError) else "Provider request failed", provider.source)
             errors[provider.key] = {"message": str(exc), "at": now().isoformat()}
+            PROVIDER_DIAGNOSTICS.setdefault(provider.key, {}).update({"most_recent_failure": errors[provider.key]["at"], "failure_reason": str(exc), "latency_ms": round((time.monotonic() - started) * 1000, 1)})
     return output, errors
 
 
 def provider_health() -> list[dict[str, Any]]:
     settings = get_settings()
-    return [{"provider": p.key, "source": p.source, "status": "configured" if (p.required_setting is None and settings.live_providers_enabled) or (p.required_setting and getattr(settings, p.required_setting, None)) else "unavailable", "required_setting": p.required_setting} for p in PROVIDERS]
+    results = []
+    for provider in PROVIDERS:
+        configured = provider.required_setting is None or bool(getattr(settings, provider.required_setting, None))
+        runtime = PROVIDER_DIAGNOSTICS.get(provider.key, {})
+        results.append({
+            "provider": provider.key, "source": provider.source,
+            "status": "configured" if configured else "unavailable",
+            "configured": configured, "enabled": settings.live_providers_enabled,
+            "most_recent_success": runtime.get("most_recent_success"),
+            "most_recent_failure": runtime.get("most_recent_failure"),
+            "latency_ms": runtime.get("latency_ms"),
+            "cache_status": "in-memory TTL cache enabled" if settings.provider_cache_seconds > 0 else "disabled",
+            "missing_credential_reason": None if configured else f"{provider.required_setting} is not configured",
+            "required_setting": provider.required_setting,
+        })
+    return results

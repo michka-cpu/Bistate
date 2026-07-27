@@ -1,12 +1,14 @@
 /* eslint-disable no-undef */
 // @ts-nocheck
 import { useEffect, useState } from 'react'
+import { PropertyIntelligence } from './PropertyIntelligence'
 
 
 export function TabContent({ tab, property, properties, memo, notes, tasks, documents, valuation, refresh }: { tab: Tab; property: Property; properties: Property[]; memo: Memo | null; notes: Note[]; tasks: Task[]; documents: Document[]; valuation: Valuation | null; refresh: () => Promise<void> }) {
   const output = property.underwriting_output
   if (tab === 'Overview') return <Overview property={property} memo={memo} tasks={tasks} refresh={refresh} />
   if (tab === 'Listing') return <DataSection title="Listing details" data={{ address: property.address, county: property.county, asking_price: property.asking_price, description: property.description }} />
+  if (tab === 'Property Intelligence') return <PropertyIntelligence propertyId={property.id} onRefreshed={refresh} />
   if (tab === 'Activity Timeline') return <ActivityTimeline property={property} notes={notes} documents={documents} />
   if (tab === 'Financials') return <DataSection title="Workbook financial summary" data={output?.dashboard ?? {}} />
   if (tab === 'Underwriting') return <div className="two-column"><DataSection title="Assumptions used" data={output?.assumptions ?? {}} /><DataSection title="Traceability" data={output?.traceability ?? {}} /></div>
