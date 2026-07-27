@@ -11,6 +11,17 @@ def test_supported_listing_provider_selection() -> None:
     assert normalize_listing(PropertyImport(listing_url="https://example.test/listing")).listing_source == "manual"
 
 
+def test_is_stale_treats_naive_timestamps_as_utc() -> None:
+    reference = datetime(2026, 2, 5, tzinfo=timezone.utc)
+    # A tz-naive persisted timestamp (as SQLite returns) must not raise when compared
+    # to a tz-aware reference; it is interpreted as UTC.
+    assert is_stale({"last_updated": "2026-01-01T00:00:00"}, reference) is True   # 35 days old
+    assert is_stale({"last_updated": "2026-01-20T00:00:00"}, reference) is False  # 16 days old
+    assert is_stale({"last_updated": "2026-01-20T00:00:00+00:00"}, reference) is False
+    assert is_stale({"last_updated": None}, reference) is True
+    assert is_stale({"last_updated": "not-a-date"}, reference) is True
+
+
 def test_unconfigured_enrichment_has_provenance_and_explicit_missing_reason() -> None:
     data, errors = enrich_property(Property(name="Test", address="1 Test St", city="Hudson", state="NY"))
     assert not errors

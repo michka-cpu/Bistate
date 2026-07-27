@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -21,16 +21,7 @@ router = APIRouter(prefix="/properties", tags=["acquisition"])
 @router.post("/import", response_model=PropertyRead, status_code=status.HTTP_201_CREATED)
 def import_property(payload: PropertyImport, db: Session = Depends(get_db)) -> Property:
     listing = normalize_listing(payload)
-    duplicate = db.scalar(
-        select(Property).where(
-            or_(
-                Property.listing_url == listing.listing_url if listing.listing_url else False,
-                (Property.address.ilike(listing.address))
-                & (Property.city.ilike(listing.city))
-                & (Property.state.ilike(listing.state)),
-            )
-        )
-    )
+    duplicate = _find_duplicate(listing, db)
     if duplicate is not None:
         raise HTTPException(status_code=409, detail=f"Property already exists (id={duplicate.id})")
     prop = Property(
@@ -129,6 +120,36 @@ def _run_pipeline(prop: Property, refresh: bool = False) -> None:
     prop.pipeline_state["underwrite"] = "completed"
     prop.pipeline_state["memo"] = "completed"
     prop.activity_events.append(PropertyActivityEvent(event_type="refreshed" if refresh else "analyzed", message="Analysis completed"))
+
+
+def _normalize_address(value: str | None) -> str:
+    """Casefold, strip punctuation, and collapse whitespace so that addresses differing
+    only by capitalization, punctuation, or spacing compare equal for de-duplication."""
+    if not value:
+        return ""
+    stripped = "".join(char if char.isalnum() or char.isspace() else " " for char in value)
+    return " ".join(stripped.split()).casefold()
+
+
+def _find_duplicate(listing, db: Session) -> Property | None:
+    """Return an existing property that matches by listing URL or by normalized address."""
+    if listing.listing_url:
+        by_url = db.scalar(select(Property).where(Property.listing_url == listing.listing_url))
+        if by_url is not None:
+            return by_url
+    target = _normalize_address(listing.address)
+    if not target:
+        return None
+    state = (listing.state or "").casefold()
+    city = _normalize_address(listing.city)
+    for candidate in db.scalars(select(Property)):
+        if (
+            _normalize_address(candidate.address) == target
+            and _normalize_address(candidate.city) == city
+            and (candidate.state or "").casefold() == state
+        ):
+            return candidate
+    return None
 
 
 def _get_property(property_id: int, db: Session) -> Property:

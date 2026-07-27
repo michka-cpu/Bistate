@@ -9,7 +9,7 @@ from app.models.discovered_listing import DiscoveredListing
 from app.models.property import Property
 from app.schemas.discovery import DiscoveredListingRead, ListingSearch, WatchlistUpdate
 from app.schemas.property import PropertyRead
-from app.services.discovery_providers import PROVIDERS
+from app.services.discovery_providers import PROVIDERS, listing_matches_filters
 
 router = APIRouter(prefix="/discovery", tags=["discovery"])
 
@@ -23,7 +23,11 @@ def search_listings(filters: ListingSearch, db: Session = Depends(get_db)) -> li
                 record = DiscoveredListing(provider_listing_id=item.external_id, listing_source=item.source, listing_url=item.url, address=item.address, city=item.city, state=item.state, postal_code=item.postal_code, county=item.county, asking_price=item.asking_price, acreage=item.acreage, bedrooms=item.bedrooms, bathrooms=item.bathrooms, property_type=item.property_type, photo_url=item.photo_url, listing_date=item.listing_date)
                 db.add(record)
     db.commit()
-    return list(db.scalars(select(DiscoveredListing).order_by(DiscoveredListing.listing_date.desc())))
+    # Return only listings that satisfy the submitted filters. Discovered listings are
+    # persisted across searches (to retain watchlist state), so the response must be
+    # filtered to the current query rather than returning the entire stored table.
+    stored = db.scalars(select(DiscoveredListing).order_by(DiscoveredListing.listing_date.desc()))
+    return [listing for listing in stored if listing_matches_filters(listing, filters)]
 
 
 @router.get("/listings", response_model=list[DiscoveredListingRead])

@@ -58,6 +58,7 @@ PROVIDERS = [
     DomainListingProvider("Zillow", ("zillow.com",)),
     DomainListingProvider("Realtor", ("realtor.com",)),
     DomainListingProvider("Redfin", ("redfin.com",)),
+    DomainListingProvider("LandWatch", ("landwatch.com",)),
     DomainListingProvider("Airbnb", ("airbnb.com",)),
     DomainListingProvider("LoopNet", ("loopnet.com",)),
 ]

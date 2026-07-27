@@ -9,6 +9,12 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 
+# Playwright
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/.playwright/
+
 # Local data and env
 *.db
 *.sqlite3

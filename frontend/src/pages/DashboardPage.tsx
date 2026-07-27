@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AcquisitionPipeline, Dashboard, KpiGrid, PipelineProgress, TabContent, StatusDot, EmptyState } from '../components/PropertyDetailPage'
+import { ExportMenu } from '../components/ExportMenu'
 import type { FormEvent } from 'react'
 
 type EnrichmentField = { value: unknown; source: string; retrieval_status?: 'live' | 'unavailable'; last_updated: string | null; confidence: number; missing_reason?: string | null }
@@ -130,7 +131,7 @@ export default function DashboardPage() {
         {selected ? <>
           <section className="property-hero">
             <div><div className="eyebrow">{selected.listing_source ?? 'Manual import'} {selected.mls_number ? `· ${selected.mls_number}` : ''}</div><h1>{selected.name}</h1><p>{selected.address}, {selected.city}, {selected.state} {selected.postal_code}</p></div>
-            <div className="hero-actions"><select aria-label="Pipeline status" value={selected.status} onChange={(event) => void updateStatus(event.target.value)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select>{selected.listing_url && <a href={selected.listing_url} target="_blank" rel="noreferrer">View listing ↗</a>}</div>
+            <div className="hero-actions"><select aria-label="Pipeline status" value={selected.status} onChange={(event) => void updateStatus(event.target.value)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select>{selected.listing_url && <a href={selected.listing_url} target="_blank" rel="noreferrer">View listing ↗</a>}<ExportMenu propertyId={selected.id} hasUnderwriting={Boolean(selected.underwriting_output)} /></div>
           </section>
           <Dashboard properties={properties} />
           <KpiGrid property={selected} />
