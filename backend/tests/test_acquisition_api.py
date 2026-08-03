@@ -44,6 +44,28 @@ def test_import_rejects_normalized_duplicate_address_and_url(client: TestClient)
     assert duplicate_url.status_code == 409
 
 
+def test_import_rejects_duplicate_addresses_differing_only_by_punctuation_or_spacing(client: TestClient) -> None:
+    assert client.post("/api/properties/import", json={"raw_address": "742 Evergreen Terrace, Springfield, NY 12345"}).status_code == 201
+    for variant in (
+        "742 Evergreen Terrace., Springfield, NY 12345",   # trailing punctuation
+        "742  Evergreen  Terrace, Springfield, NY 12345",  # collapsed whitespace
+        "742 EVERGREEN TERRACE, springfield, ny 12345",    # capitalization
+        "742 Evergreen Terrace, Springfield, NY 12345",    # exact
+    ):
+        duplicate = client.post("/api/properties/import", json={"raw_address": variant})
+        assert duplicate.status_code == 409, variant
+        assert "already exists" in duplicate.json()["detail"]
+
+
+def test_import_labels_landwatch_urls_with_their_provider(client: TestClient) -> None:
+    prop = client.post(
+        "/api/properties/import",
+        json={"listing_url": "https://www.landwatch.com/columbia-county-new-york-land-for-sale/pid/123456"},
+    )
+    assert prop.status_code == 201
+    assert prop.json()["listing_source"] == "LandWatch"
+
+
 def test_refresh_enrichment_underwriting_and_report(client: TestClient) -> None:
     prop = client.post("/api/properties/import", json={"raw_address": "8 River Rd, Hudson, NY 12534"}).json()
     property_id = prop["id"]

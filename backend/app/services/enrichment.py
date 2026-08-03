@@ -221,7 +221,10 @@ def is_stale(item: dict[str, Any], reference: datetime | None = None) -> bool:
     timestamp = item.get("last_updated")
     if not timestamp: return True
     try: updated = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-    except ValueError: return True
+    except (ValueError, TypeError): return True
+    # Persisted timestamps can be tz-naive (e.g. SQLite `updated_at`). Treat naive
+    # values as UTC so the comparison never mixes offset-naive and offset-aware datetimes.
+    if updated.tzinfo is None: updated = updated.replace(tzinfo=timezone.utc)
     return (reference or now()) - updated > STALE_AFTER
 
 

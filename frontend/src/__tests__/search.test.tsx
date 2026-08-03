@@ -1,7 +1,9 @@
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { expect, test, vi } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
 import SearchPage from '../pages/SearchPage'
+
+afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 test('searches discovery listings and saves a result to the watchlist', async () => {
   const user = userEvent.setup(); const onPipeline = vi.fn()
@@ -11,4 +13,13 @@ test('searches discovery listings and saves a result to the watchlist', async ()
   expect(await screen.findByText('20 River Road')).toBeInTheDocument()
   await user.click(screen.getByRole('button', { name: 'Save to Watchlist' }))
   expect(screen.getByRole('button', { name: 'Saved to Watchlist' })).toBeInTheDocument()
+})
+
+test('shows the empty-results message when a filtered search returns no matches', async () => {
+  const user = userEvent.setup()
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce({ ok: true, json: async () => [] }))
+  render(<SearchPage onPipeline={vi.fn()} />)
+  await user.type(screen.getByLabelText('County'), 'Nowhere')
+  await user.click(screen.getByRole('button', { name: 'Search listings' }))
+  expect(await screen.findByText('No listings match these filters.')).toBeInTheDocument()
 })

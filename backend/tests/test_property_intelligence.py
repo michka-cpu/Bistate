@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+from fastapi.testclient import TestClient
+
 from app.models.property import Property
 from app.services.property_intelligence import build_property_intelligence
 
@@ -46,3 +48,15 @@ def test_intelligence_endpoint_and_refresh_contract(client):
     assert response.status_code == 200
     assert [section["name"] for section in response.json()["sections"]] == ["Access", "Land and environment", "Infrastructure", "Regulatory", "Financial and civic"]
     assert client.post(f"/api/properties/{created['id']}/enrich").status_code == 200
+
+
+def test_intelligence_endpoint_succeeds_for_persisted_property_with_acreage(client: TestClient) -> None:
+    # Regression: the synthesized `confirmed_acreage`/`current_taxes` facts stamp the
+    # property's persisted `updated_at`, which SQLite returns tz-naive. Staleness checks
+    # must not raise when comparing that against a tz-aware "now".
+    created = client.post("/api/properties", json={"name": "Acre House", "address": "9 Farm Rd", "city": "Ghent", "state": "NY"}).json()
+    assert client.put(f"/api/properties/{created['id']}", json={"acreage": 12, "annual_taxes": 8000}).status_code == 200
+    response = client.get(f"/api/properties/{created['id']}/intelligence")
+    assert response.status_code == 200
+    acreage = next(field for section in response.json()["sections"] for field in section["fields"] if field["key"] == "confirmed_acreage")
+    assert acreage["value"] == 12
