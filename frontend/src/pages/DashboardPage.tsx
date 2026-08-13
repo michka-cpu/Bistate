@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AcquisitionPipeline, Dashboard, KpiGrid, PipelineProgress, TabContent, StatusDot, EmptyState } from '../components/PropertyDetailPage'
+import { AcquisitionPipeline, Dashboard, KpiGrid, PipelineProgress, TabContent, StatusDot, EmptyState, EstimateBanner, IncompleteListingBanner } from '../components/PropertyDetailPage'
 import { ExportMenu } from '../components/ExportMenu'
 import type { FormEvent } from 'react'
 
@@ -21,18 +21,21 @@ type Property = {
   enrichment_data: Record<string, EnrichmentField>; underwriting_output: Underwriting | null
   overall_score: number | null; buy_score: number | null; airbnb_score: number | null; wedding_score: number | null
   personal_use_score: number | null; confidence_score: number | null; is_favorite: boolean; is_pinned: boolean; pipeline_state: Record<string, string>; provider_errors: Record<string, unknown>; created_at: string; updated_at: string
+  financials_are_estimates?: boolean; missing_core_inputs?: string[]; listing_incomplete?: boolean
 }
+type ProviderHealth = { provider: string; source: string; configured: boolean; enabled: boolean }
 type Note = { id: number; body: string; author: string | null; created_at: string }
 type Task = { id: number; title: string; assignee: string | null; due_date: string | null; completed: boolean }
 type Document = { id: number; filename: string; document_type: string; size_bytes: number }
 type Valuation = { estimated_value: number | null; value_range: { low: number; high: number } | null; confidence_score: number; pricing_signal: string; discount_premium: number | null; percent_difference: number | null; comparables: Array<Record<string, unknown>>; explanation: string }
 type Memo = { executive_summary: string; strengths: string[]; weaknesses: string[]; risks: string[]; comparable_properties: Array<Record<string, unknown>>; missing_information: string[] }
 
-const tabs = ['Overview', 'Property Intelligence', 'Listing', 'Financials', 'Underwriting', 'Renovation', 'Airbnb', 'Wedding', 'Maps', 'Comparable Sales', 'Valuation', 'Documents', 'Notes', 'Activity Timeline'] as const
+// Primary diligence sections first (the workflow the user follows), then supporting tabs.
+const tabs = ['Overview', 'Listing', 'Financials', 'Airbnb', 'Wedding Venue', 'Personal Use', 'Property Intelligence', 'Comparable Sales', 'Risks & Missing Data', 'Underwriting', 'Renovation', 'Maps', 'Valuation', 'Documents', 'Notes', 'Activity Timeline'] as const
 const statuses = ['New', 'Reviewing', 'Underwriting', 'Needs Info', 'Approved', 'Rejected', 'Under Contract', 'Closed']
 type Tab = typeof tabs[number]
 
-export default function DashboardPage() {
+export default function DashboardPage({ focusPropertyId = null, onOpenDiscovery }: { focusPropertyId?: number | null; onOpenDiscovery?: () => void } = {}) {
   const [properties, setProperties] = useState<Property[]>([])
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>('Overview')
@@ -46,8 +49,10 @@ export default function DashboardPage() {
   const [valuation, setValuation] = useState<Valuation | null>(null)
   const [search, setSearch] = useState('')
   const [comparison, setComparison] = useState<number[]>([])
+  const [providerHealth, setProviderHealth] = useState<ProviderHealth[]>([])
 
   const selected = properties.find((property) => property.id === selectedId) ?? null
+  const liveProvidersOff = providerHealth.length > 0 && providerHealth.every((item) => !item.enabled)
   const visibleProperties = properties.filter((property) => `${property.address} ${property.county ?? ''} ${property.status}`.toLowerCase().includes(search.toLowerCase()))
 
   async function loadProperties(preferredId?: number) {
@@ -81,8 +86,12 @@ export default function DashboardPage() {
 
   // The initial pipeline load should run once; later mutations refresh it explicitly.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { void loadProperties().catch((reason: Error) => setError(reason.message)) }, [])
+  useEffect(() => { void loadProperties(focusPropertyId ?? undefined).catch((reason: Error) => setError(reason.message)) }, [])
   useEffect(() => { if (selectedId) void loadWorkspace(selectedId) }, [selectedId])
+  // A completed search/import lands on a specific property; focus it once it is loaded.
+  useEffect(() => { if (focusPropertyId != null) { setSelectedId(focusPropertyId); setActiveTab('Overview') } }, [focusPropertyId])
+  // Disclose provider availability so an "analysis" over unconfigured providers is not mistaken for real data.
+  useEffect(() => { void fetch('/api/properties/providers/health').then(async (response) => { if (response.ok) setProviderHealth(await response.json() as ProviderHealth[]) }).catch(() => setProviderHealth([])) }, [])
 
   async function importProperty(event: FormEvent) {
     event.preventDefault()
@@ -106,6 +115,17 @@ export default function DashboardPage() {
     if (response.ok) await loadProperties(selected.id)
   }
 
+  async function resolveListing(propertyId: number, rawAddress?: string) {
+    setBusy(true); setError('')
+    try {
+      const response = await fetch(`/api/properties/${propertyId}/resolve`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(rawAddress ? { raw_address: rawAddress } : {}) })
+      if (!response.ok) throw new Error('The listing could not be resolved.')
+      const property = await response.json() as Property
+      if (property.listing_incomplete && !rawAddress) setError('The listing URL does not contain a full address. Enter the street address to resolve it.')
+      await loadProperties(propertyId)
+    } catch (reason) { setError((reason as Error).message) } finally { setBusy(false) }
+  }
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -113,7 +133,7 @@ export default function DashboardPage() {
         <input className="property-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search address, county, status…" />
         <div className="pipeline-label"><span>Property pipeline</span><span>{properties.length}</span></div>
         <nav className="property-list" aria-label="Property pipeline">
-          {visibleProperties.map((property) => <div key={property.id} className={`property-row ${property.id === selectedId ? 'active' : ''}`}><button onClick={() => { setSelectedId(property.id); setActiveTab('Overview') }}><span className="property-score">{Math.round(property.overall_score ?? 0)}</span><span><strong>{property.name}</strong><small>{property.city}, {property.state}</small></span><StatusDot status={property.status} /></button><button className="favorite" onClick={() => void updatePreference(property.id, { is_favorite: !property.is_favorite })}>{property.is_favorite ? '★' : '☆'}</button><label className="compare-toggle"><input type="checkbox" checked={comparison.includes(property.id)} onChange={() => setComparison((items) => items.includes(property.id) ? items.filter((id) => id !== property.id) : [...items, property.id])} /> Compare</label></div>)}
+          {visibleProperties.map((property) => <div key={property.id} className={`property-row ${property.id === selectedId ? 'active' : ''}`}><button onClick={() => { setSelectedId(property.id); setActiveTab('Overview') }}><span className="property-score">{Math.round(property.overall_score ?? 0)}</span><span><strong>{property.name}</strong><small>{property.listing_incomplete ? 'Listing information incomplete' : `${property.city}, ${property.state}`}</small></span><StatusDot status={property.status} /></button><button className="favorite" onClick={() => void updatePreference(property.id, { is_favorite: !property.is_favorite })}>{property.is_favorite ? '★' : '☆'}</button><label className="compare-toggle"><input type="checkbox" checked={comparison.includes(property.id)} onChange={() => setComparison((items) => items.includes(property.id) ? items.filter((id) => id !== property.id) : [...items, property.id])} /> Compare</label></div>)}
           {!properties.length && <div className="empty-sidebar">Import your first opportunity to start the pipeline.</div>}
         </nav>
         <div className="sidebar-footer"><span className="online-dot" /> Workbook engine ready</div>
@@ -121,6 +141,7 @@ export default function DashboardPage() {
 
       <main className="workspace">
         <header className="topbar">
+          {onOpenDiscovery && <button type="button" className="back-to-discovery" onClick={onOpenDiscovery}>← Discovery</button>}
           <form className="import-form" onSubmit={importProperty}>
             <span className="search-icon">＋</span>
             <input aria-label="Listing URL, address, or MLS number" value={importValue} onChange={(event) => setImportValue(event.target.value)} placeholder="Paste a Zillow, Realtor, Redfin, Airbnb, LoopNet URL, address, or MLS #" />
@@ -128,9 +149,12 @@ export default function DashboardPage() {
           </form>
         </header>
         {error && <div className="error-banner">{error}</div>}
+        {liveProvidersOff && <div className="disclosure-banner" role="status">Live enrichment providers are not configured in this environment. Location, flood, demographic, and market facts were not retrieved — coverage below reflects that, and figures are not backed by external data.</div>}
         {selected ? <>
+          {selected.listing_incomplete && <IncompleteListingBanner property={selected} busy={busy} onResolve={(address) => void resolveListing(selected.id, address)} />}
+          {selected.financials_are_estimates && <EstimateBanner property={selected} />}
           <section className="property-hero">
-            <div><div className="eyebrow">{selected.listing_source ?? 'Manual import'} {selected.mls_number ? `· ${selected.mls_number}` : ''}</div><h1>{selected.name}</h1><p>{selected.address}, {selected.city}, {selected.state} {selected.postal_code}</p></div>
+            <div><div className="eyebrow">{selected.listing_source ?? 'Manual import'} {selected.mls_number ? `· ${selected.mls_number}` : ''}</div><h1>{selected.name}</h1><p>{selected.listing_incomplete ? 'Address unresolved — see the banner above to complete this listing.' : `${selected.address}, ${selected.city}, ${selected.state} ${selected.postal_code ?? ''}`}</p></div>
             <div className="hero-actions"><select aria-label="Pipeline status" value={selected.status} onChange={(event) => void updateStatus(event.target.value)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select>{selected.listing_url && <a href={selected.listing_url} target="_blank" rel="noreferrer">View listing ↗</a>}<ExportMenu propertyId={selected.id} hasUnderwriting={Boolean(selected.underwriting_output)} /></div>
           </section>
           <Dashboard properties={properties} />
@@ -138,7 +162,7 @@ export default function DashboardPage() {
           <PipelineProgress property={selected} onRetry={() => void fetch(`/api/properties/${selected.id}/refresh`, { method: 'POST' }).then(() => loadProperties(selected.id))} />
           <AcquisitionPipeline property={selected} />
           <nav className="tabs" aria-label="Property sections">{tabs.map((tab) => <button key={tab} className={activeTab === tab ? 'active' : ''} onClick={() => setActiveTab(tab)}>{tab}</button>)}</nav>
-          <section className="tab-content"><TabContent tab={activeTab} property={selected} properties={properties.filter((item) => comparison.includes(item.id))} memo={memo} notes={notes} tasks={tasks} documents={documents as never} valuation={valuation} refresh={() => loadWorkspace(selected.id)} /></section>
+          <section className="tab-content"><TabContent tab={activeTab} property={selected} properties={properties.filter((item) => comparison.includes(item.id))} memo={memo} notes={notes} tasks={tasks} documents={documents as never} valuation={valuation} refresh={() => loadWorkspace(selected.id)} onResolve={(address?: string) => void resolveListing(selected.id, address)} onRefresh={() => void fetch(`/api/properties/${selected.id}/refresh`, { method: 'POST' }).then(() => loadProperties(selected.id))} liveProvidersOff={liveProvidersOff} /></section>
         </> : <EmptyState />}
       </main>
     </div>

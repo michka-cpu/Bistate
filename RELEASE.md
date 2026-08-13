@@ -1,85 +1,88 @@
-# Release Notes — QA End-to-End Pass
+# Release Notes — Core User Journey
 
-Branch: `qa/e2e-pass-fixes`
-Scope: full end-to-end QA of the running app (frontend `:5173`, API `:8000`), fixes, and regression coverage.
+Branch: `fix/core-user-journey`
+Scope: make Bistate a single obvious workflow — **Find → Import/enrich → Review → Analyze → Compare → Decide** — so a user can analyze a *known* property without understanding the "Listing Discovery" vs. "Pipeline" split. Fixes to listing identity and misleading financial presentation, plus regression coverage.
 
-**Guardrails honored:** no changes to underwriting formulas, weights, thresholds, hard constraints, or workbook source-of-truth logic. Disclosed unavailable/unconfigured provider results (valuation "Unavailable", provider health) were treated as expected behavior, not bugs.
-
----
-
-## Bugs found
-
-| # | Severity | Area | Symptom |
-|---|----------|------|---------|
-| 1 | High | Discovery search | Every search returned the entire stored listings table; county / town / ZIP / price / acreage / bedrooms / property-type filters had **no effect**, and "No listings match these filters." was unreachable once any listing existed. |
-| 2 | High | Property Intelligence | `GET /api/properties/{id}/intelligence` returned **HTTP 500** for any property with acreage/taxes/HOA; the UI tab showed "Property intelligence could not be loaded." |
-| 3 | Medium | Import de-duplication | Addresses differing only by punctuation or whitespace (`742 Evergreen Terrace.`, `742  Evergreen  Terrace`) were imported as **duplicates** instead of being rejected. |
-| 4 | Medium | Exports | Property CSV/PDF/XLSX export endpoints existed and worked, but there was **no UI control** to trigger them (dead `ExportMenu` stub). |
-| 5 | Low | Import provenance | LandWatch listing URLs imported with `listing_source = "manual"` instead of `"LandWatch"`, inconsistent with discovery treating LandWatch as a first-class source. |
-
-### Root causes
-1. `api/discovery.py::search_listings` used the match predicate only to gate inserts, then returned `select(DiscoveredListing)…` unfiltered.
-2. `services/property_intelligence.py` synthesizes diligence facts stamped with the property's persisted `updated_at`, which SQLite returns **tz-naive**; `services/enrichment.py::is_stale` subtracted it from a tz-aware `now()` → `TypeError: can't subtract offset-naive and offset-aware datetimes`.
-3. `api/acquisition.py::import_property` de-dup used SQL `ilike` (case-insensitive only) with no punctuation/whitespace normalization.
-4. `components/ExportMenu.tsx` was a placeholder stub imported by no one; the dashboard hero never rendered export links.
-5. `services/listing_providers.py::PROVIDERS` omitted a LandWatch domain adapter, so LandWatch URLs fell through to the generic ("manual") provider.
+**Guardrails honored:** no changes to the calibrated underwriting formulas, weights, thresholds, hard constraints, or scoring methodology. The workbook engine (`services/underwriting.py`) and score derivation (`services/acquisition.py`) are untouched. All new signals are **derived, read-only, and additive** — the numeric outputs are identical; only their labeling and provenance changed. Disclosed unavailable/unconfigured provider results are surfaced honestly, never replaced with invented values.
 
 ---
 
-## Bugs fixed
+## The core problem
 
-All five are fixed in this branch and verified live against rebuilt containers (API responses + browser).
+There were two competing full-screen workflows. The **Listing Discovery** page offered only structured filters (County / Town / ZIP / …); to analyze a *known* address or listing URL you had to leave it, open the **Pipeline**, and use a separate import bar. Worse, the results a user did get were misleading:
 
-1. **Discovery filters respected.** Search response is now filtered by the submitted query through a shared `listing_matches_filters()` helper (also used by the sample provider), so all filters take effect and the empty-state message is reachable. Persisted listings still retain their watchlist state across searches.
-2. **Property Intelligence no longer 500s.** `is_stale` normalizes naive timestamps to UTC (and tolerates non-string values), so staleness checks never mix naive/aware datetimes. The tab renders coverage, red flags, opportunities, and provider diagnostics.
-3. **Robust duplicate detection.** Import de-dup normalizes addresses (casefold + strip punctuation + collapse whitespace) before comparison, so punctuation-, spacing-, and capitalization-only variants are recognized as duplicates (`409`). Listing-URL de-dup is unchanged.
-4. **Exports reachable.** `ExportMenu` is now a real component wired to the export endpoints and placed in the property hero (CSV / XLSX always; PDF memo appears once underwriting output exists).
-5. **Correct LandWatch provenance.** Added a LandWatch domain provider so LandWatch imports are labeled `"LandWatch"`.
+- Zillow URLs ending `…/215394889_zpid/` became property **names** like "215394889 Zpid, Unknown, NA".
+- With live providers off (default) and no asking price, the workbook ran on **defaults**, so every input-less property displayed identical **Overall 71/100, IRR 22.3%, Cap 22.4%, Cash $418k** — while **Confidence read 0/100**, with nothing labeling the figures as estimates.
 
 ---
 
-## Tests added
+## Bugs found & fixed
 
-**Backend (`pytest`) — 40 passing (5 new):**
-- `test_discovery_api.py::test_search_returns_only_listings_matching_the_submitted_filters` — non-matching filters return `[]`; price bounds trim the set (BUG 1).
-- `test_property_intelligence.py::test_intelligence_endpoint_succeeds_for_persisted_property_with_acreage` — API-level regression for the intelligence 500 (BUG 2).
-- `test_live_intelligence.py::test_is_stale_treats_naive_timestamps_as_utc` — unit test for the staleness fix (BUG 2).
-- `test_acquisition_api.py::test_import_rejects_duplicate_addresses_differing_only_by_punctuation_or_spacing` (BUG 3).
-- `test_acquisition_api.py::test_import_labels_landwatch_urls_with_their_provider` (BUG 5).
+| # | Severity | Area | Symptom → Fix |
+|---|----------|------|---------------|
+| 1 | High | Workflow | No universal entry point on Discovery; a known property couldn't be analyzed without navigating to the Pipeline. → Added a prominent **"Paste an address or listing URL" / "Search & Analyze"** input above the (now secondary) "Discover properties" filters; on submit it imports, enriches, underwrites, and **navigates to the property detail view** with progress shown. |
+| 2 | High | Listing identity | Raw provider IDs masqueraded as names/addresses (`215394889 Zpid`, `Unknown, NA`). → Rewrote `listing_providers.py` with per-provider URL parsing (Zillow/Redfin/Realtor/LandWatch). A URL that yields only an opaque id is **not** turned into a fake address; it is marked **`listing_incomplete`** with an explicit "Listing information incomplete" state and a **Resolve/Retry** action. No address is ever invented. |
+| 3 | High | Misleading results | High scores/returns shown as authoritative alongside 0/100 confidence. → Added derived, read-only `financials_are_estimates` + `missing_core_inputs`. When core inputs are missing the workbook still runs (unchanged), but the UI labels every input-derived figure **"· est"**, shows an **estimate banner**, and flags low confidence. |
+| 4 | High | Detail hierarchy | No "Personal Use" / "Risks & Missing Data" tabs; Overview lacked scores, key financials, and any "why". → Rebuilt Overview (score summary, key financials with estimate labeling, **"Why this scored this way"** — positives, risks, hard-constraint failures, missing info) and reordered/added tabs: Overview, Listing, Financials, Airbnb, Wedding Venue, Personal Use, Property Intelligence, Comparable Sales, Risks & Missing Data, … |
+| 5 | High | De-duplication | Distinct incomplete listings (different zpid-only URLs) collapsed into one because they share the `Unknown/NA` placeholder address. → Incomplete listings de-duplicate by **URL only**, never by the placeholder locality. |
+| 6 | Medium | Provider disclosure | That live enrichment never ran was only discoverable deep inside the Intelligence tab. → A disclosure banner ("Live enrichment providers are not configured…") now appears on the detail view and in Risks & Missing Data. |
+| 7 | Medium | Cross-format dedup | A listing URL that resolves to an already-imported address was not recognized as the same property. → URL slugs now normalize to real addresses and dedupe against typed addresses. |
 
-**Frontend (`vitest`) — 8 passing (3 new):**
-- `export-menu.test.tsx` — CSV/XLSX always render; PDF only with underwriting (BUG 4). *(2 tests)*
-- `search.test.tsx::shows the empty-results message when a filtered search returns no matches` (BUG 1, UI side).
-
-**End-to-end (`Playwright`, newly added) — 8 passing:**
-- `e2e/discovery.spec.ts` — filtered search excludes non-matches; blank search returns provider listings; watchlist add/remove; pipeline reachable. *(4 tests)*
-- `e2e/pipeline.spec.ts` — import + hero exports; duplicate-by-punctuation rejection; Property Intelligence loads for an acreage-bearing property; tab navigation. *(4 tests)*
-
-Playwright was added with the smallest necessary config (`playwright.config.ts`, `test:e2e` script, `@playwright/test` dev dep), targeting the already-running app via `E2E_BASE_URL` (default `http://localhost:5173`).
-
-**Also verified green:** `npm run build` (tsc + vite) and `eslint --max-warnings=0`.
+### Key root causes
+- `listing_providers.py::_address_from_url` title-cased the last URL path segment and `_parse_address` filled `city="Unknown"`, `state="NA"` — so provider ids became names. Rewritten with street-number detection, per-provider id stripping (e.g. Realtor `_M…`), and locality recovery from path segments (e.g. Redfin `/NY/Hudson/…`).
+- `services/acquisition.py::underwrite_property` calls `calculate(UnderwritingInputs(**payload))`; an empty payload (no `asking_price`) runs the full **default** workbook scenario. Behavior preserved; now disclosed via `financials_are_estimates`.
 
 ---
 
-## Remaining known issues
+## What changed
 
-Not addressed in this branch (out of scope for the QA fixes, or deliberate/disclosed behavior):
+**Backend (no scoring changes):**
+- `services/listing_providers.py` — full rewrite: robust per-provider URL → address parsing, `needs_resolution` + `provider_reference`, no fabricated addresses.
+- `schemas/property.py` — added derived `computed_field`s: `missing_core_inputs`, `financials_are_estimates`, `listing_incomplete` (also flags legacy `Unknown/NA` rows automatically).
+- `api/acquisition.py` — import sets status `Needs Info` for unresolved listings; new `POST /properties/{id}/resolve` (retry from URL or complete with a supplied address); incomplete listings de-dup by URL only.
 
-1. **Poor address extraction from URL-only imports.** Redfin/LandWatch/generic URLs with a trailing numeric id produce property names/addresses like `"98765"` or `"123456"` (the last path slug). This is a heuristic limitation of importing without a licensed listing feed; it is not fabricated data, but it is a visible UX wart. *(Low)*
-2. **Duplicate detection does not canonicalize street suffixes.** `123 Main St` and `123 Main Street` are still treated as distinct. Left intentionally — abbreviation expansion risks false-positive merges and needs a real address-normalization library. *(Low)*
-3. **Naive CSV escaping.** `exports/csv` replaces commas with spaces rather than quoting fields, so values containing commas are altered. *(Low)*
-4. **Valuation is always "Unavailable"** and all providers report unconfigured/disabled — expected, by design, until licensed feeds/credentials are configured. Not a bug. *(Expected)*
-5. **Discovered listings accumulate indefinitely** and there is no pagination on properties or listings; fine at current scale. *(Low)*
-6. **Source is not volume-mounted in Docker.** The running app is served from built images, so changes require `docker compose up -d --build` to appear. *(Process note)*
-7. **Frontend tech debt.** `PropertyDetailPage.tsx` is a large `@ts-nocheck` monolith; several placeholder components remain (`ActivityTimeline`, `InvestmentMemo`, `PropertyCard`, etc.) unused. *(Maintainability)*
+**Frontend:**
+- `pages/SearchPage.tsx` — universal "Search & Analyze" input above secondary "Discover properties" filters; input classification, unsupported-site/malformed/blank handling, progress steps, duplicate → open-existing.
+- `App.tsx` / `pages/DashboardPage.tsx` — search/import navigates to the property detail; estimate + provider-disclosure banners; incomplete-listing banner with inline Resolve; "← Discovery"; sidebar shows "Listing information incomplete" instead of "Unknown, NA".
+- `components/PropertyDetailPage.tsx` — new Overview (ScoreSummary, KeyFinancials, WhyPanel), new tabs (Personal Use, Wedding Venue, Risks & Missing Data), Listing provenance panel, estimate labels.
+- `components/KPICards.tsx` — "· est" tags on input-derived KPIs; low-confidence emphasis.
 
 ---
 
-## Suggested next priorities (ranked)
+## Tests
 
-1. **Wire the e2e suite into CI** (GitHub Actions): boot API + web, run `pytest`, `vitest`, and `playwright test` on every PR. Highest leverage — the three regressions in this pass would have been caught automatically.
-2. **Introduce shared, tested address normalization** used by both import de-dup and display, and extend de-dup to street-suffix canonicalization behind tests (resolves known issues #1 and #2).
-3. **Harden exports:** proper CSV quoting; confirm PDF/XLSX contents against persisted values; surface an explicit "underwrite first" affordance where the PDF link is hidden (resolves #3).
-4. **Audit tz-aware datetimes end to end.** The intelligence 500 was one instance of naive/aware mixing; store/read timestamps consistently as UTC-aware to prevent recurrence elsewhere.
-5. **Persist and expose provider/enrichment errors in the UI** so unavailable vs. failed states are distinguishable to users (the API already returns `provider_errors`).
-6. **Frontend maintainability:** split `PropertyDetailPage.tsx`, remove `@ts-nocheck`, and delete or implement the unused placeholder components.
+**Backend (`pytest`) — 45 passing (new/updated):**
+- `test_import_marks_provider_id_only_urls_incomplete` — zpid-only URL → `listing_incomplete`, `Needs Info`, honest name.
+- `test_resolve_completes_an_incomplete_listing` — resolve with a supplied address.
+- `test_distinct_incomplete_listings_are_not_deduplicated` — different zpid URLs stay distinct; identical URL still 409.
+- `test_redfin_and_realtor_urls_resolve_locality` — Redfin `/NY/Hudson/…` and Realtor `_M…` resolve city/state.
+- `test_financials_are_flagged_as_estimates_until_core_inputs_exist`.
+- Updated `test_import_rejects_normalized_duplicate_address_and_url` to assert the improved cross-format (URL↔address) dedup.
+
+**Frontend (`vitest`) — 10 passing (new):**
+- `search.test.tsx` — universal search routes an address through import into the detail view; unsupported site rejected before any request.
+
+**End-to-end (`Playwright`) — 15 passing (7 new in `e2e/journey.spec.ts`):**
+universal address import → detail; estimate labeling; zpid-only incomplete → resolve; blank rejected; unsupported site rejected; new diligence tabs navigable; duplicate opens the existing property. Existing discovery/pipeline specs remain green.
+
+**Also verified:** `npm run build` (tsc + vite), `eslint --max-warnings=0`, and a manual API sweep across real Zillow/Realtor/Redfin/LandWatch URLs, partial address, and MLS number. No console errors in the browser.
+
+---
+
+## Remaining known limitations
+
+1. **URL parsing is heuristic, not a licensed feed.** Land/parcel URLs (LandWatch) and zpid-only Zillow links legitimately carry no street address, so they are marked incomplete (correct, not fabricated) and require Resolve. Facts (beds/baths/price/flood/comps) still need enrichment providers.
+2. **Live enrichment providers are unconfigured by default** (`live_providers_enabled=false`), so enrichment, valuation, and live comparables are unavailable — disclosed in the UI, never invented. Configure credentials to populate them.
+3. **Financials are workbook estimates until inputs are entered.** With no asking price, figures come from the default scenario and are labeled as estimates; enter asking price/taxes for property-specific returns.
+4. **"Investment Score" and "Risk Score" are not separate model outputs.** Represented honestly by the Buy score and by the Risk summary / hard-constraint list rather than invented numbers.
+5. **Legacy `Unknown/NA` rows** are now flagged incomplete with a Resolve action but retain their original stored names until resolved (no destructive backfill was performed).
+6. **Naive CSV escaping** and unbounded listing accumulation from the prior pass are unchanged. *(Low)*
+7. **`PropertyDetailPage.tsx` remains a large `@ts-nocheck` module.** Grew with this work; a future split is warranted.
+
+---
+
+## Suggested next priorities
+1. Wire `pytest` + `vitest` + `playwright` into CI so these journeys are guarded automatically.
+2. Configure at least the free public providers (Census geocoder/ACS, FEMA) so imports geocode and coverage rises without paid feeds.
+3. Split `PropertyDetailPage.tsx` and remove `@ts-nocheck`.
+4. Optional server-side address canonicalization (street-suffix expansion) behind tests to strengthen dedup further.

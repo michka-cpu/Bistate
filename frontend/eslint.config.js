@@ -7,9 +7,12 @@ export default [
   { ignores: ['dist'] },
   {
     files: ['**/*.{ts,tsx}'],
-    languageOptions: { parser: tseslint.parser, ecmaVersion: 2020, globals: { window: 'readonly', document: 'readonly', fetch: 'readonly', Response: 'readonly', FormData: 'readonly', HTMLInputElement: 'readonly' } },
+    languageOptions: { parser: tseslint.parser, ecmaVersion: 2020, globals: { window: 'readonly', document: 'readonly', fetch: 'readonly', Response: 'readonly', FormData: 'readonly', HTMLInputElement: 'readonly', URL: 'readonly' } },
     plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
-    rules: { ...js.configs.recommended.rules, ...reactHooks.configs.recommended.rules, 'react-refresh/only-export-components': ['warn', { allowConstantExport: true }] },
+    // The base no-unused-vars rule (run here with the TS parser) reports parameter names
+    // inside function *type* annotations as unused; disable arg-position checks so those
+    // documentation-only names are allowed while unused variables/imports are still caught.
+    rules: { ...js.configs.recommended.rules, ...reactHooks.configs.recommended.rules, 'no-unused-vars': ['error', { args: 'none' }], 'react-refresh/only-export-components': ['warn', { allowConstantExport: true }] },
   },
   {
     // Node-context tooling and end-to-end specs run outside the browser bundle.
