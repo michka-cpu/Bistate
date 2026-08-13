@@ -46,6 +46,9 @@ class Property(Base):
     description: Mapped[str | None] = mapped_column(Text())
     agent: Mapped[dict | None] = mapped_column(JSON())
     enrichment_data: Mapped[dict] = mapped_column(JSON(), nullable=False, default=dict)
+    # Listing-level facts retrieved from the source (per-field provenance + retrieval
+    # status). Distinct from enrichment_data (public enrichment) and user-supplied edits.
+    listing_data: Mapped[dict] = mapped_column(JSON(), nullable=False, default=dict)
     underwriting_output: Mapped[dict | None] = mapped_column(JSON())
     underwriting_assumptions: Mapped[dict | None] = mapped_column(JSON())
     overall_score: Mapped[float | None] = mapped_column(Float())

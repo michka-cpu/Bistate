@@ -1,5 +1,36 @@
 # Release Notes
 
+## Listing ingestion — retrieve real listing facts from supported URLs
+
+Before this change, pasting a supported listing URL only parsed the address from the URL slug and geocoded it — it never fetched listing facts, so `asking_price`, `bedrooms`, `bathrooms`, `square_feet`, `property_type`, etc. were always empty and every URL import stayed permanently `analysis_incomplete`. This adds a focused ingestion layer that retrieves **real** listing-level facts from legitimate sources, or fails honestly.
+
+**Architecture (reuses the adapter pattern):**
+- New `services/listing_ingestion.py`: for a supported URL, reads the listing page's **own published structured metadata** (schema.org JSON-LD + OpenGraph), respecting `robots.txt` and using a normal browser UA to read a single pasted detail page. A licensed listing-data API key hook (`listing_data_api_key`) is preferred when configured. Facts are merged across sibling JSON-LD objects and matched to the canonical listing; the listing's **own published address becomes the identity** so a provider redirect can't attach facts to a mismatched slug address.
+- New `listing_data` JSON column (migration `20260723_0008`) storing **per-field provenance** `{value, source, retrieval_status, missing_reason, url, retrieved_at}` — kept distinct from `enrichment_data` (public enrichment), the underwriting columns (which real facts populate), user edits, and `underwriting_output` (derived).
+- Import (and refresh) call ingestion before underwriting; when enough real core facts exist, the **existing analysis-incomplete gate opens automatically** (no gating change).
+- `PropertyRead` exposes `listing_data` + a `listing_ingestion` summary (`provider`, `status`, `facts_retrieved`, `fields_retrieved`, `reason`).
+
+**Honesty guarantees:** a URL is *ingested* only when real facts are retrieved from a source — resolving the slug address or geocoding does **not** count. Blocked providers (403/429), not-found (404), no-metadata pages, unsupported hosts, and malformed URLs each fail with a clear, field-level reason. Facts are never invented.
+
+**Fields supported per provider (via published metadata):** asking price, bedrooms, bathrooms, square feet, property type, listing status, listing date, photos, and the listing's address. Acreage/lot size and taxes are not exposed in schema.org listing metadata and are marked unavailable. (A licensed API would extend coverage.)
+
+**Live results (this run, real URLs):**
+- **Redfin** — serves schema.org JSON-LD/OG; ingested real facts (e.g. `$535,000 · 4bd · 3ba · 2,574 sqft · For sale · listed 2026-08-05 · photo`, all with Redfin provenance) → auto-un-gated. (Redfin is occasionally inconsistent: some pages return no metadata → honest "recognized, but facts could not be retrieved".)
+- **Zillow** — **inconsistent**: sometimes serves structured metadata (ingested real facts: price/beds/baths/sqft/type/status/photo), sometimes 403/404 (honest block/not-found). Both handled.
+- **Realtor** — returned HTTP 429 → honest block.
+- **LandWatch** — returned HTTP 403 (and land URLs carry no street slug) → honest block / incomplete.
+- **Unsupported** (`example.com`) → "not a supported listing provider". **Malformed** (`notaurl`) → 422 URL validation. **Address-only** import → `listing_ingestion.facts_retrieved=false`, not mislabeled as ingestion, still gated.
+
+**UI:** the Listing tab shows a facts table with per-field value + source, and "Unavailable" + reason for fields the source didn't publish. When a provider is recognized but facts can't be retrieved, a banner says so explicitly and states it is **not** a successful ingestion — never presenting geocoding as if it were listing facts.
+
+**Tests (deterministic — no live third-party sites in CI):** `test_listing_ingestion.py` (9) parses a representative JSON-LD/OG fixture through the real parser, and covers blocked/no-metadata/unsupported/disabled, populated import + auto-un-gate, blocked import stays gated, and the address-only regression. Frontend `listing-facts.test.tsx` (2) covers populated vs. unavailable Listing states. Playwright covers the honest-failure real workflow (a supported URL that blocks) and the address-only regression. CI (`ci.yml`) runs backend/frontend suites only; Playwright is local.
+
+**Known limitation:** Zillow/Realtor/LandWatch actively block automated reads much of the time; without a licensed data API their facts are unavailable and disclosed as such. A fabricated URL that a provider *redirects* to a different listing can attach that listing's real facts to the slug address when the metadata carries no confirmable address (real pasted URLs are unaffected — the slug matches the listing).
+
+**Guardrails:** no change to underwriting formulas/weights/thresholds/methodology, provider/enrichment logic, or the analysis-incomplete/memo/export gating (only extended to consume newly real fields). Suites: **backend 74, migrations clean, frontend build/lint/18, Playwright 18**.
+
+---
+
 ## Acceptance fix — Investment memo (and exports) leaked default-workbook conclusions while analysis-incomplete
 
 The hero/Overview gating was working, but the **Investment memo** still leaked default-scenario conclusions: an overall Bistate score (~70.5/100) plus strengths like "acquisition score above benchmark", "DSCR ≥ 1.25x", and "positive cash-on-cash". Those contradict the analysis-incomplete state. Audit found the same leak in **CSV/XLSX exports**, the **portfolio summary averages**, the **side-by-side comparison**, and the **suitability score rings**, and a banner ("Financial figures are estimates") that implied the default figures were usable.

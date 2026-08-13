@@ -64,6 +64,35 @@ test.describe('Core property journey', () => {
     await expect(page.getByText('Listing information incomplete.')).toHaveCount(0)
   })
 
+  test('a supported listing URL that blocks automated access fails honestly (no fake ingestion)', async ({ page }) => {
+    await page.goto('/')
+    // Zillow blocks server-side reads; the app must resolve the location but say listing
+    // facts could not be retrieved — never presenting geocoding as a successful ingestion.
+    const zpid = uniq()
+    await page.getByLabel(UNIVERSAL).fill(`https://www.zillow.com/homedetails/${zpid}-Birch-Ln-Hudson-NY-12534/${zpid}_zpid/`)
+    await page.getByRole('button', { name: ANALYZE }).click()
+    await expect(page.locator('.property-hero h1')).toBeVisible()
+    await page.getByRole('button', { name: 'Listing', exact: true }).click()
+    await expect(page.getByText(/recognized, but listing facts could not be retrieved/)).toBeVisible()
+    await expect(page.getByText(/not a successfully ingested listing/)).toBeVisible()
+    // No fabricated facts: the analysis stays incomplete.
+    await page.getByRole('button', { name: 'Overview', exact: true }).click()
+    await expect(page.locator('.analysis-incomplete').first()).toBeVisible()
+  })
+
+  test('an address-only import is never labeled a successful listing ingestion', async ({ page }) => {
+    await page.goto('/')
+    const address = `${uniq()} Ingest Way, Hudson, NY 12534`
+    await page.getByLabel(UNIVERSAL).fill(address)
+    await page.getByRole('button', { name: ANALYZE }).click()
+    await expect(page.locator('.property-hero h1')).toContainText(address.split(',')[0])
+    await page.getByRole('button', { name: 'Listing', exact: true }).click()
+    // No provider ingestion banner for a manually typed address; facts are unavailable.
+    await expect(page.getByText(/recognized, but listing facts/)).toHaveCount(0)
+    await expect(page.getByText(/Listing facts ingested/)).toHaveCount(0)
+    await expect(page.getByText('Unavailable').first()).toBeVisible()
+  })
+
   test('a blank universal search is rejected before importing', async ({ page }) => {
     await page.goto('/')
     await page.getByRole('button', { name: ANALYZE }).click()

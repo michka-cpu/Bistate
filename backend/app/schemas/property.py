@@ -133,8 +133,23 @@ class PropertyRead(PropertyBase):
     pipeline_state: dict[str, Any] = Field(default_factory=dict)
     provider_errors: dict[str, Any] = Field(default_factory=dict)
     valuation_data: dict[str, Any] = Field(default_factory=dict)
+    listing_data: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(from_attributes=True)
+
+    @computed_field
+    @property
+    def listing_ingestion(self) -> dict[str, Any]:
+        """Summary of whether real listing facts were retrieved from the source."""
+        meta = (self.listing_data or {}).get("_meta") or {}
+        return {
+            "provider": meta.get("provider"),
+            "status": meta.get("status", "none"),
+            "facts_retrieved": bool(meta.get("facts_retrieved")),
+            "fields_retrieved": meta.get("fields_retrieved", []),
+            "reason": meta.get("reason"),
+            "canonical_url": meta.get("canonical_url"),
+        }
 
     @computed_field
     @property
