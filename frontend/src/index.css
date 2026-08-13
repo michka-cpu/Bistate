@@ -101,6 +101,12 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .risk-list.danger { color: #f2a6ae; }.risk-list.warning { color: #e7c98a; }
 .estimate-note { margin-bottom: 16px; padding: 10px 14px; border: 1px solid #5a4a24; border-radius: 8px; color: #e7cd97; background: #201a0e; font-size: 12px; }
 
+.analysis-incomplete { margin: 0 38px 28px; border-color: #5a4a24; background: linear-gradient(180deg, #1f1a10, #14100a); }
+.tab-content .analysis-incomplete { margin: 0; }
+.analysis-incomplete .panel-title > span { color: #f2d69a; }
+.analysis-incomplete p { color: #cdbb92; font-size: 13px; line-height: 1.6; margin: 0 0 12px; }
+.required-inputs { margin: 0; padding-left: 20px; color: #e7cd97; font-size: 13px; line-height: 1.8; }
+.required-inputs li { font-weight: 600; }
 .kpi-grid.kpi-estimate { border-color: #4a3c1e; }
 .kpi-estimate-tag { color: #d9a95b; font-style: normal; font-size: 10px; }
 .kpi-grid article.kpi-low strong { color: #f2b06a; }

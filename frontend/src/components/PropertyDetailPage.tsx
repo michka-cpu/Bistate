@@ -2,18 +2,20 @@
 // @ts-nocheck
 import { useEffect, useState } from 'react'
 import { PropertyIntelligence } from './PropertyIntelligence'
+import { AnalysisIncomplete } from './AnalysisIncomplete'
+import { analysisIncomplete } from '../lib/analysis'
 
 
 export function TabContent({ tab, property, properties, memo, notes, tasks, documents, valuation, refresh, onResolve, onRefresh, liveProvidersOff }: { tab: Tab; property: Property; properties: Property[]; memo: Memo | null; notes: Note[]; tasks: Task[]; documents: Document[]; valuation: Valuation | null; refresh: () => Promise<void>; onResolve?: (address?: string) => void; onRefresh?: () => void; liveProvidersOff?: boolean }) {
   const output = property.underwriting_output
-  const estimate = Boolean(property.financials_are_estimates)
+  const incomplete = analysisIncomplete(property)
   if (tab === 'Overview') return <Overview property={property} memo={memo} tasks={tasks} refresh={refresh} onResolve={onResolve} liveProvidersOff={liveProvidersOff} />
   if (tab === 'Listing') return <ListingSection property={property} onResolve={onResolve} />
   if (tab === 'Property Intelligence') return <PropertyIntelligence propertyId={property.id} onRefreshed={refresh} />
   if (tab === 'Activity Timeline') return <ActivityTimeline property={property} notes={notes} documents={documents} />
-  if (tab === 'Financials') return <><EstimateNote estimate={estimate} property={property} /><DataSection title="Workbook financial summary" data={output?.dashboard ?? {}} /></>
-  if (tab === 'Underwriting') return <><EstimateNote estimate={estimate} property={property} /><div className="two-column"><DataSection title="Assumptions used" data={output?.assumptions ?? {}} /><DataSection title="Traceability" data={output?.traceability ?? {}} /></div></>
-  if (tab === 'Renovation') return <DataSection title="Renovation range and categories" data={output?.renovation ?? {}} />
+  if (tab === 'Financials') return incomplete ? <AnalysisIncomplete property={property} heading="Financials — analysis incomplete" context="workbook financial output" /> : <DataSection title="Workbook financial summary" data={output?.dashboard ?? {}} />
+  if (tab === 'Underwriting') return incomplete ? <AnalysisIncomplete property={property} heading="Underwriting — analysis incomplete" context="workbook assumptions and traceability" /> : <div className="two-column"><DataSection title="Assumptions used" data={output?.assumptions ?? {}} /><DataSection title="Traceability" data={output?.traceability ?? {}} /></div>
+  if (tab === 'Renovation') return incomplete ? <AnalysisIncomplete property={property} heading="Renovation — analysis incomplete" context="renovation budget and ranges" /> : <DataSection title="Renovation range and categories" data={output?.renovation ?? {}} />
   if (tab === 'Airbnb') return <Suitability title="Airbnb suitability" score={property.airbnb_score} field={property.enrichment_data.airbnb_suitability} />
   if (tab === 'Wedding Venue') return <Suitability title="Wedding venue suitability" score={property.wedding_score} field={property.enrichment_data.wedding_suitability} />
   if (tab === 'Personal Use') return <PersonalUse property={property} />
@@ -25,18 +27,22 @@ export function TabContent({ tab, property, properties, memo, notes, tasks, docu
   return <NotesAndTasks propertyId={property.id} notes={notes} tasks={tasks} refresh={refresh} />
 }
 
-export function Dashboard({ properties }: { properties: Property[] }) { const average = (values: Array<number | null>) => { const valid = values.filter((value): value is number => value != null); return valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null }; const highest = [...properties].sort((a, b) => (b.overall_score ?? 0) - (a.overall_score ?? 0))[0]; return <section className="dashboard-grid"><Metric label="Properties imported" value={String(properties.length)} /><Metric label="Deals under review" value={String(properties.filter((property) => ['Reviewing', 'Underwriting'].includes(property.status)).length)} /><Metric label="Average Buy Score" value={score(average(properties.map((property) => property.buy_score)))} /><Metric label="Average IRR" value={percent(average(properties.map((property) => property.underwriting_output?.projection.levered_irr ?? null)))} /><Metric label="Highest-scoring property" value={highest ? `${highest.name} · ${Math.round(highest.overall_score ?? 0)}` : '—'} /><Metric label="Pipeline counts" value={`${properties.filter((property) => property.status === 'Closed').length} closed`} /></section> }
+export function Dashboard({ properties }: { properties: Property[] }) { const average = (values: Array<number | null>) => { const valid = values.filter((value): value is number => value != null); return valid.length ? valid.reduce((a, b) => a + b, 0) / valid.length : null }; const scored = properties.filter((property) => !analysisIncomplete(property)); const highest = [...scored].sort((a, b) => (b.overall_score ?? 0) - (a.overall_score ?? 0))[0]; return <section className="dashboard-grid"><Metric label="Properties imported" value={String(properties.length)} /><Metric label="Deals under review" value={String(properties.filter((property) => ['Reviewing', 'Underwriting'].includes(property.status)).length)} /><Metric label="Average Buy Score" value={score(average(scored.map((property) => property.buy_score)))} /><Metric label="Average IRR" value={percent(average(scored.map((property) => property.underwriting_output?.projection.levered_irr ?? null)))} /><Metric label="Highest-scoring property" value={highest ? `${highest.name} · ${Math.round(highest.overall_score ?? 0)}` : '—'} /><Metric label="Pipeline counts" value={`${properties.filter((property) => property.status === 'Closed').length} closed`} /></section> }
 function Metric({ label, value }: { label: string; value: string }) { return <article><span>{label}</span><strong>{value}</strong></article> }
 function Overview({ property, memo, tasks, refresh, onResolve, liveProvidersOff }: { property: Property; memo: Memo | null; tasks: Task[]; refresh: () => Promise<void>; onResolve?: (address?: string) => void; liveProvidersOff?: boolean }) {
   const images = Array.isArray(property.images) ? property.images : []; const missingInformation = Array.isArray(memo?.missing_information) ? memo.missing_information : []
   const estimate = Boolean(property.financials_are_estimates)
+  const incomplete = analysisIncomplete(property)
   return <div className="overview">
-    <ScoreSummary property={property} />
-    <KeyFinancials property={property} estimate={estimate} />
-    <WhyPanel property={property} memo={memo} liveProvidersOff={liveProvidersOff} onResolve={onResolve} />
+    {incomplete
+      ? <AnalysisIncomplete property={property} heading="Analysis incomplete" context="Overall/Buy/Airbnb/Wedding/Personal scores, cash required, cap rate, cash-on-cash, and IRR" />
+      : <><ScoreSummary property={property} /><KeyFinancials property={property} estimate={estimate} /></>}
+    <WhyPanel property={property} memo={memo} liveProvidersOff={liveProvidersOff} onResolve={onResolve} incomplete={incomplete} />
     <div className="overview-grid">
       {images.length > 0 && <article className="panel"><div className="panel-title"><span>Listing gallery</span></div><div className="chip-list">{images.map((image) => <a key={image} href={image} target="_blank" rel="noreferrer">Listing photo ↗</a>)}</div></article>}
-      <article className="panel memo-panel"><div className="panel-title"><span>Investment memo</span><span className="confidence-pill">{Math.round(property.confidence_score ?? 0)}% confidence</span></div><p className="summary">{memo?.executive_summary ?? 'Investment memo is being prepared.'}</p><MemoList title="Strengths" items={Array.isArray(memo?.strengths) ? memo.strengths : []} tone="positive" /><MemoList title="Risks & weaknesses" items={[...(Array.isArray(memo?.weaknesses) ? memo.weaknesses : []), ...(Array.isArray(memo?.risks) ? memo.risks : [])]} tone="warning" /></article>
+      <article className="panel memo-panel"><div className="panel-title"><span>Investment memo</span><span className="confidence-pill">{Math.round(property.confidence_score ?? 0)}% confidence</span></div><p className="summary">{memo?.executive_summary ?? 'Investment memo is being prepared.'}</p>{memo?.analysis_incomplete
+        ? <><MemoList title="Required to complete the analysis" items={Array.isArray(memo?.required_inputs) ? memo.required_inputs : []} tone="warning" /><MemoList title="Verified facts known" items={Array.isArray(memo?.verified_facts) ? memo.verified_facts : []} tone="positive" /></>
+        : <><MemoList title="Strengths" items={Array.isArray(memo?.strengths) ? memo.strengths : []} tone="positive" /><MemoList title="Risks & weaknesses" items={[...(Array.isArray(memo?.weaknesses) ? memo.weaknesses : []), ...(Array.isArray(memo?.risks) ? memo.risks : [])]} tone="warning" /></>}</article>
       <article className="panel"><div className="panel-title"><span>Property facts</span></div><dl className="facts"><Fact label="Asking price" value={money(property.asking_price)} /><Fact label="Annual taxes" value={money(property.annual_taxes)} /><Fact label="Beds / baths" value={`${property.bedrooms ?? '—'} / ${property.bathrooms ?? '—'}`} /><Fact label="Square feet" value={property.square_feet?.toLocaleString() ?? '—'} /><Fact label="Acreage" value={property.acreage?.toString() ?? '—'} /><Fact label="County" value={property.county ?? '—'} /></dl></article>
       <article className="panel task-panel"><div className="panel-title"><span>Open tasks</span><span>{tasks.filter((task) => !task.completed).length}</span></div>{tasks.slice(0, 4).map((task) => <TaskRow key={task.id} propertyId={property.id} task={task} refresh={refresh} />)}{!tasks.length && <p className="muted">No tasks yet. Add one in Notes.</p>}</article>
       <article className="panel missing-panel"><div className="panel-title"><span>Missing information</span><span>{missingInformation.length}</span></div><div className="chip-list">{missingInformation.length ? missingInformation.map((item) => <span key={item}>{labelize(item)}</span>) : <span className="muted">None recorded.</span>}</div></article>
@@ -75,21 +81,25 @@ function KeyFinancials({ property, estimate }: { property: Property; estimate: b
 
 // "Why this scored this way": strongest positives, biggest risks, hard-constraint failures,
 // and the most important missing information — all read from persisted output; no new scoring.
-function WhyPanel({ property, memo, liveProvidersOff, onResolve }: { property: Property; memo: Memo | null; liveProvidersOff?: boolean; onResolve?: (address?: string) => void }) {
+function WhyPanel({ property, memo, liveProvidersOff, onResolve, incomplete }: { property: Property; memo: Memo | null; liveProvidersOff?: boolean; onResolve?: (address?: string) => void; incomplete?: boolean }) {
   const dashboard = property.underwriting_output?.dashboard ?? {}
   const zero = property.underwriting_output?.zero_revenue_affordability ?? {}
-  const positives = Array.isArray(memo?.strengths) ? memo.strengths : []
+  // Positives and hard-constraint checks derive from the (default) workbook output, so
+  // they are not meaningful until the analysis is complete; suppress them when gated.
+  const positives = incomplete ? [] : (Array.isArray(memo?.strengths) ? memo.strengths : [])
   const risks = [...(Array.isArray(memo?.risks) ? memo.risks : []), ...(Array.isArray(memo?.weaknesses) ? memo.weaknesses : [])]
   const constraints: string[] = []
-  if (typeof dashboard.dscr === 'number' && dashboard.dscr < 1.25) constraints.push(`Debt service coverage is ${dashboard.dscr.toFixed(2)}× (below the 1.25× target).`)
-  if (typeof dashboard.cash_on_cash_return === 'number' && dashboard.cash_on_cash_return <= 0) constraints.push('Base-case cash-on-cash return is not positive.')
-  if (zero.status === 'FAIL') constraints.push('Zero-revenue affordability ceiling is exceeded.')
+  if (!incomplete) {
+    if (typeof dashboard.dscr === 'number' && dashboard.dscr < 1.25) constraints.push(`Debt service coverage is ${dashboard.dscr.toFixed(2)}× (below the 1.25× target).`)
+    if (typeof dashboard.cash_on_cash_return === 'number' && dashboard.cash_on_cash_return <= 0) constraints.push('Base-case cash-on-cash return is not positive.')
+    if (zero.status === 'FAIL') constraints.push('Zero-revenue affordability ceiling is exceeded.')
+  }
   const missing = Array.isArray(memo?.missing_information) ? memo.missing_information.slice(0, 8) : []
   return <section className="panel why-panel"><div className="panel-title"><span>Why this scored this way</span></div>
     <div className="why-grid">
-      <WhyList title="Strongest positives" tone="positive" items={positives} empty="No positive factors are supported by stored data yet." />
+      <WhyList title="Strongest positives" tone="positive" items={positives} empty={incomplete ? 'Awaiting required inputs before assessing.' : 'No positive factors are supported by stored data yet.'} />
       <WhyList title="Biggest risks" tone="warning" items={risks} empty="No risks identified yet." />
-      <WhyList title="Hard-constraint failures" tone="danger" items={constraints} empty="No hard-constraint failures in the current output." />
+      <WhyList title="Hard-constraint failures" tone="danger" items={constraints} empty={incomplete ? 'Awaiting required inputs before assessing.' : 'No hard-constraint failures in the current output.'} />
       <WhyList title="Important missing information" tone="muted" items={missing.map(labelize)} empty="Nothing critical is missing." />
     </div>
     {liveProvidersOff && <p className="score-caveat">Live enrichment providers are off in this environment, so location, flood, and market facts were not retrieved.</p>}
@@ -99,7 +109,7 @@ function WhyPanel({ property, memo, liveProvidersOff, onResolve }: { property: P
 function WhyList({ title, items, tone, empty }: { title: string; items: string[]; tone: string; empty: string }) { return <div className={`why-list ${tone}`}><strong>{title}</strong>{items.length ? <ul>{items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul> : <p className="muted">{empty}</p>}</div> }
 
 function EnrichmentGrid({ property }: { property: Property }) { return <div className="enrichment-grid">{Object.entries(property.enrichment_data).map(([key, field]) => <article className="panel" key={key}><div className="panel-title"><span>{labelize(key)}</span><span>{Math.round(field.confidence * 100)}%</span></div><strong className="enrichment-value">{field.value === null ? 'Unavailable' : formatValue(field.value)}</strong><small>{field.source ?? 'Provider not recorded'} · {field.retrieval_status ?? (field.value === null ? 'unavailable' : 'live')}</small>{field.last_updated && <small>Updated {new Date(field.last_updated).toLocaleDateString()}{Date.now() - new Date(field.last_updated).getTime() > 30 * 86400000 ? ' · Stale' : ''}</small>}{field.missing_reason && <small>{field.missing_reason}</small>}</article>)}</div> }
-function Suitability({ title, score: value, field }: { title: string; score: number | null; field?: EnrichmentField }) { return <article className="panel suitability"><div className="score-ring">{Math.round(value ?? 0)}</div><div><div className="eyebrow">Bistate suitability model</div><h2>{title}</h2><p>{field?.value === null || !field ? 'Provider facts are incomplete. Verify local regulations, demand, and physical feasibility before approval.' : 'The initial suitability score uses available property facts. Validate it with market and regulatory diligence.'}</p><small>Source: {field?.source ?? 'Not available'} · Confidence {Math.round((field?.confidence ?? 0) * 100)}%</small></div></article> }
+function Suitability({ title, score: value, field }: { title: string; score: number | null; field?: EnrichmentField }) { const scored = Boolean(field && field.value != null); return <article className="panel suitability"><div className="score-ring">{scored ? Math.round(value ?? 0) : 'n/a'}</div><div><div className="eyebrow">Bistate suitability model</div><h2>{title}</h2><p>{scored ? 'The initial suitability score uses available property facts. Validate it with market and regulatory diligence.' : 'Not scored — the property facts this score depends on (e.g. bedrooms, acreage) are not available. A default is not shown.'}</p><small>Source: {field?.source ?? 'Not available'} · Confidence {Math.round((field?.confidence ?? 0) * 100)}%</small></div></article> }
 function DataSection({ title, data }: { title: string; data: Record<string, unknown> }) { return <article className="panel data-panel"><div className="panel-title"><span>{title}</span></div><div className="data-grid">{Object.entries(data).map(([key, value]) => <div key={key}><span>{labelize(key)}</span><strong>{formatValue(value)}</strong></div>)}</div></article> }
 function ValuationPanel({ property, valuation }: { property: Property; valuation: Valuation | null }) { if (!valuation) return <article className="panel"><p className="muted">Loading valuation…</p></article>; return <div className="valuation-layout"><article className="panel"><div className="panel-title"><span>Market valuation</span><span className="confidence-pill">{Math.round(valuation.confidence_score)}% confidence</span></div><div className="valuation-summary"><div><span>Asking price</span><strong>{money(property.asking_price)}</strong></div><div><span>Estimated value</span><strong>{money(valuation.estimated_value)}</strong></div><div><span>Value range</span><strong>{valuation.value_range ? `${money(valuation.value_range.low)} – ${money(valuation.value_range.high)}` : '—'}</strong></div><div><span>Discount / premium</span><strong>{money(valuation.discount_premium)} {valuation.percent_difference != null ? `(${valuation.percent_difference.toFixed(1)}%)` : ''}</strong></div><div><span>Pricing signal</span><strong>{valuation.pricing_signal}</strong></div></div><p className="summary">{valuation.explanation}</p></article><article className="panel"><div className="panel-title"><span>Comparable map</span><span>Placeholder</span></div><div className="valuation-map-placeholder">Map markers will appear when comparable coordinates are available.</div></article><article className="panel comparison-table"><div className="panel-title"><span>Comparable sales</span><span>{valuation.comparables.length}</span></div><table><thead><tr><th>Address</th><th>Sale</th><th>Distance</th><th>Sale date</th><th>Similarity</th><th>Adjustments</th></tr></thead><tbody>{valuation.comparables.map((comp) => <tr key={String(comp.id)}><td>{String(comp.address)}</td><td>{money(comp.sale_price as number)}</td><td>{String(comp.distance_miles ?? '—')} mi</td><td>{String(comp.sale_date ?? '—')}</td><td>{String(comp.similarity_score ?? '—')}</td><td>{Array.isArray(comp.adjustments) && comp.adjustments.length ? (comp.adjustments as Array<{ field: string; percent: number }>).map((item) => `${item.field} ${(item.percent * 100).toFixed(1)}%`).join(', ') : 'None'}</td></tr>)}</tbody></table></article></div> }
 function Comparables({ memo, valuation }: { memo: Memo | null; valuation?: Valuation | null }) {
@@ -133,12 +143,31 @@ function score(value: number | null | undefined) { return value == null ? '—' 
 function formatValue(value: unknown): string { if (typeof value === 'number') return Math.abs(value) < 1 ? percent(value) : value.toLocaleString(undefined, { maximumFractionDigits: 2 }); if (value === null) return '—'; if (Array.isArray(value)) return `${value.length} records`; if (typeof value === 'object') { const fact = value as { name?: unknown; distance_miles?: unknown; drive_time_minutes?: unknown }; if (fact.name) return `${String(fact.name)}${fact.distance_miles != null ? ` · ${String(fact.distance_miles)} mi` : ''}${fact.drive_time_minutes != null ? ` · ${String(fact.drive_time_minutes)} min` : ''}`; return 'View detailed output' } return String(value) }
 
 function PropertyMap({ property }: { property: Property }) { const lat = property.latitude ?? 42.65; const lng = property.longitude ?? -74; const delta = .08; const bbox = `${lng-delta}%2C${lat-delta}%2C${lng+delta}%2C${lat+delta}`; return <article className="panel map-panel"><div className="panel-title"><span>Interactive map</span><span>OpenStreetMap · subject location</span></div><iframe title="Property location map" src={`https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&layer=mapnik&marker=${lat}%2C${lng}`} /><p className="muted">Pan and zoom the map, then click the subject marker. Nearby airports, Amtrak, parcels, and comparables appear as live enrichment supplies locations.</p></article> }
-function ComparisonTable({ properties }: { properties: Property[] }) { const rows: Array<[string, (property: Property) => number | null, 'money' | 'percent' | 'score']> = [['Purchase price', (p) => p.asking_price, 'money'], ['Underwriting score', (p) => p.overall_score, 'score'], ['Renovation', (p) => p.underwriting_output?.dashboard.renovation_contingency ?? null, 'money'], ['Projected IRR', (p) => p.underwriting_output?.projection.levered_irr ?? null, 'percent'], ['Airbnb score', (p) => p.airbnb_score, 'score'], ['Wedding score', (p) => p.wedding_score, 'score'], ['Cash required', (p) => p.underwriting_output?.dashboard.total_cash_required ?? null, 'money']]; return <article className="panel comparison-table"><div className="panel-title"><span>Side-by-side comparison</span><span>{properties.length} selected</span></div><table><thead><tr><th>Metric</th>{properties.map((property) => <th key={property.id}>{property.name}</th>)}</tr></thead><tbody>{rows.map(([name, get, kind]) => { const values = properties.map(get); const best = Math.max(...values.map((value) => value ?? -Infinity)); return <tr key={name}><th>{name}</th>{values.map((value, index) => <td className={value === best ? 'best' : ''} key={properties[index].id}>{kind === 'money' ? money(value) : kind === 'percent' ? percent(value) : score(value)}</td>)}</tr> })}</tbody></table></article> }
+function ComparisonTable({ properties }: { properties: Property[] }) {
+  // `gated: true` rows derive from workbook output; they are withheld for any column whose
+  // property is analysis-incomplete, so a comparison never leaks default-workbook numbers.
+  const rows: Array<[string, (property: Property) => number | null, 'money' | 'percent' | 'score', boolean]> = [
+    ['Purchase price', (p) => p.asking_price, 'money', false],
+    ['Underwriting score', (p) => p.overall_score, 'score', true],
+    ['Renovation', (p) => p.underwriting_output?.dashboard.renovation_contingency ?? null, 'money', true],
+    ['Projected IRR', (p) => p.underwriting_output?.projection.levered_irr ?? null, 'percent', true],
+    ['Airbnb score', (p) => p.airbnb_score, 'score', true],
+    ['Wedding score', (p) => p.wedding_score, 'score', true],
+    ['Cash required', (p) => p.underwriting_output?.dashboard.total_cash_required ?? null, 'money', true],
+  ]
+  const fmt = (value: number | null, kind: 'money' | 'percent' | 'score') => kind === 'money' ? money(value) : kind === 'percent' ? percent(value) : score(value)
+  return <article className="panel comparison-table"><div className="panel-title"><span>Side-by-side comparison</span><span>{properties.length} selected</span></div><table><thead><tr><th>Metric</th>{properties.map((property) => <th key={property.id}>{property.name}</th>)}</tr></thead><tbody>{rows.map(([name, get, kind, gated]) => {
+    const cells = properties.map((property) => (gated && analysisIncomplete(property)) ? undefined : get(property))
+    const best = Math.max(...cells.map((value) => value == null ? -Infinity : value))
+    return <tr key={name}><th>{name}</th>{cells.map((value, index) => <td className={value != null && value === best ? 'best' : ''} key={properties[index].id}>{value === undefined ? 'Incomplete' : fmt(value, kind)}</td>)}</tr>
+  })}</tbody></table></article>
+}
 function ActivityTimeline({ property }: { property: Property; notes: Note[]; documents: Document[] }) { const [events, setEvents] = useState<Array<{ id: number; event_type: string; message: string; created_at: string; metadata: Record<string, unknown> }>|null>(null); const [failed, setFailed] = useState(false); useEffect(() => { void fetch(`/api/properties/${property.id}/activity`).then(async (response) => { if (!response.ok) throw Error(); setEvents(await response.json()) }).catch(() => setFailed(true)) }, [property.id]); if (failed) return <article className="panel"><p className="muted">Activity could not be loaded.</p></article>; if (events === null) return <article className="panel"><p className="muted">Loading activity…</p></article>; if (!events.length) return <article className="panel"><p className="muted">No persisted activity yet.</p></article>; return <article className="panel timeline"><div className="panel-title"><span>Activity timeline</span></div>{events.map((event) => <div key={event.id}><b>●</b><span>{event.message}<small>{event.event_type} · {new Date(event.created_at).toLocaleString()}</small></span></div>)}</article> }
-// A persistent banner (rendered above the hero) when the workbook ran on defaults.
-export function EstimateBanner({ property }: { property: Property }) {
+// A persistent banner (rendered above the hero) when the analysis cannot be property-
+// specific. It states the results are withheld — not that default figures are usable.
+export function AnalysisIncompleteBanner({ property }: { property: Property }) {
   const missing = Array.isArray(property.missing_core_inputs) ? property.missing_core_inputs : []
-  return <div className="estimate-banner" role="status"><strong>Financial figures are estimates.</strong> No asking price was provided, so the underwriting engine used its default scenario. Missing inputs: {missing.length ? missing.map(labelize).join(', ') : 'core financial inputs'}. Enter them to calculate property-specific returns.</div>
+  return <div className="estimate-banner" role="status"><strong>Analysis incomplete.</strong> Property-specific scores and financials are withheld — the workbook's default scenario is not this property's result. Missing critical inputs: {missing.length ? missing.map(labelize).join(', ') : 'core financial inputs'}. Enter them to run the analysis.</div>
 }
 
 // A banner offering to resolve a listing that has no confirmed street address.
@@ -153,11 +182,6 @@ export function IncompleteListingBanner({ property, busy, onResolve }: { propert
   </div>
 }
 
-function EstimateNote({ estimate, property }: { estimate: boolean; property: Property }) {
-  if (!estimate) return null
-  const missing = Array.isArray(property.missing_core_inputs) ? property.missing_core_inputs : []
-  return <div className="estimate-note">Estimated output — computed from workbook defaults because these inputs are missing: {missing.length ? missing.map(labelize).join(', ') : 'asking price'}.</div>
-}
 
 function ListingSection({ property, onResolve }: { property: Property; onResolve?: (address?: string) => void }) {
   const data = { name: property.name, address: property.address, city: property.city, state: property.state, postal_code: property.postal_code, county: property.county, property_type: property.property_type, asking_price: property.asking_price, annual_taxes: property.annual_taxes, listing_source: property.listing_source, mls_number: property.mls_number, listing_status: property.status, description: property.description }
@@ -177,9 +201,11 @@ function ListingSection({ property, onResolve }: { property: Property; onResolve
 function PersonalUse({ property }: { property: Property }) {
   const facts = property.enrichment_data ?? {}
   const nyc = (facts.nyc_drive_time?.value as { drive_time_minutes?: number } | undefined)?.drive_time_minutes
-  return <article className="panel suitability"><div className="score-ring">{Math.round(property.personal_use_score ?? 0)}</div><div>
+  // The personal-use score depends on bedroom capacity; without it the value is a default, so withhold it.
+  const scored = property.bedrooms != null
+  return <article className="panel suitability"><div className="score-ring">{scored ? Math.round(property.personal_use_score ?? 0) : 'n/a'}</div><div>
     <div className="eyebrow">Bistate suitability model</div><h2>Personal use suitability</h2>
-    <p>Reflects bedroom capacity and stored access facts for use as a personal second home. Validate condition, seasonality, and travel time before relying on this score.</p>
+    <p>{scored ? 'Reflects bedroom capacity and stored access facts for use as a personal second home. Validate condition, seasonality, and travel time before relying on this score.' : 'Not scored — bedroom capacity is required and not available. A default is not shown.'}</p>
     <small>Bedrooms: {property.bedrooms ?? '—'} · Acreage: {property.acreage ?? '—'} · NYC drive time: {nyc != null ? `${nyc} min` : 'not retrieved'}</small>
   </div></article>
 }

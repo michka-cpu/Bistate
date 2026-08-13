@@ -1,28 +1,11 @@
 import { useState, type FormEvent } from 'react'
+import { buildImportBody } from '../lib/importInput'
 
 type Listing = { id: number; address: string; city: string; state: string; postal_code: string | null; county: string | null; asking_price: number | null; acreage: number | null; bedrooms: number | null; bathrooms: number | null; property_type: string | null; photo_url: string | null; listing_source: string; listing_date: string | null; is_watchlisted: boolean }
 type Filters = { county: string; town: string; postal_code: string; min_price: string; max_price: string; min_acreage: string; bedrooms: string; property_type: string }
 const initial: Filters = { county: '', town: '', postal_code: '', min_price: '', max_price: '', min_acreage: '', bedrooms: '', property_type: '' }
 
-const SUPPORTED_HOSTS = ['zillow.com', 'realtor.com', 'redfin.com', 'landwatch.com', 'airbnb.com', 'loopnet.com']
 const IMPORT_STEPS = ['Normalizing input', 'Detecting duplicates', 'Importing property', 'Running enrichment', 'Underwriting', 'Opening property']
-
-/** Classify the universal input and build the import request body, or return an error. */
-function buildImportBody(raw: string): { body?: Record<string, string>; error?: string } {
-  const value = raw.trim()
-  if (!value) return { error: 'Enter a street address or a listing URL to analyze.' }
-  if (/^https?:\/\//i.test(value) || value.startsWith('www.') || /\.[a-z]{2,}\//i.test(value)) {
-    let url: URL
-    try { url = new URL(value.startsWith('http') ? value : `https://${value}`) } catch { return { error: 'That looks like a URL but could not be parsed. Check for typos.' } }
-    const host = url.hostname.replace(/^www\./, '')
-    if (!SUPPORTED_HOSTS.some((domain) => host === domain || host.endsWith(`.${domain}`))) {
-      return { error: `${host} is not a supported listing site. Paste a Zillow, Realtor, Redfin, or LandWatch URL, or a street address.` }
-    }
-    return { body: { listing_url: url.toString() } }
-  }
-  if (/^MLS[-\s#]/i.test(value) || /^[A-Z]{1,3}[-\s]?\d{4,}$/i.test(value)) return { body: { mls_number: value } }
-  return { body: { raw_address: value } }
-}
 
 export default function SearchPage({ onOpenPipeline, onOpenProperty }: { onOpenPipeline: () => void; onOpenProperty: (id: number) => void }) {
   const [importValue, setImportValue] = useState('')

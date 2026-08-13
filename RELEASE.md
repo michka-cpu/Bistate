@@ -1,3 +1,38 @@
+# Release Notes
+
+## Acceptance fix — Investment memo (and exports) leaked default-workbook conclusions while analysis-incomplete
+
+The hero/Overview gating was working, but the **Investment memo** still leaked default-scenario conclusions: an overall Bistate score (~70.5/100) plus strengths like "acquisition score above benchmark", "DSCR ≥ 1.25x", and "positive cash-on-cash". Those contradict the analysis-incomplete state. Audit found the same leak in **CSV/XLSX exports**, the **portfolio summary averages**, the **side-by-side comparison**, and the **suitability score rings**, and a banner ("Financial figures are estimates") that implied the default figures were usable.
+
+**Fix (presentation/output gating only — workbook, weights, thresholds, provider/enrichment logic untouched):**
+- **One canonical gate** (`property_analysis_incomplete` in `schemas/property.py`) now drives the UI, the memo, and the exports identically: identity unresolved **or** critical inputs (asking price, taxes, acreage, beds/baths, sq ft) absent. `PropertyRead` also exposes `analysis_incomplete`.
+- **Memo** (`services/acquisition.py::build_investment_memo`): when incomplete it emits **no** overall/Bistate score, DSCR/CoC/financial-strength conclusion, or hard-constraint result; `strengths`/`weaknesses` are empty; `financial_summary`/`projected_returns`/`assumptions_used` are `{}` and `cash_required` is `0`. It instead states the analysis is incomplete, lists `required_inputs`, and preserves real `verified_facts` (address, county, coordinates, elevation, any known core fields). New schema fields: `analysis_incomplete`, `required_inputs`, `verified_facts`.
+- **Exports:** CSV blanks `overall_score`/`irr` and adds an `analysis_state` column; XLSX withholds "Overall score", drops the "Workbook Output" sheet, and adds an "Analysis Incomplete" sheet listing required inputs; the PDF is built from the gated memo. Complete properties still export full results.
+- **Other surfaces:** the Overview memo panel shows required inputs + verified facts (not strengths); the portfolio summary excludes incomplete records from Average Buy Score / Average IRR / highest-scoring; the side-by-side comparison shows "Incomplete" for a column's workbook-derived rows; the suitability tabs show "n/a — not scored" instead of a fallback ring when the facts they depend on are missing. The banner now reads **"Analysis incomplete … results are withheld"** rather than "estimates".
+
+**Manual retest** (`609 Green Lake Road, Catskill, NY 12414`): opens cleanly, geocoded to **Catskill, Greene County, ZIP 12414**, coords 42.29091/−73.87865, **elevation 255 ft**; confidence ≈ 5. Memo (verified in-browser) shows **no** score/DSCR/CoC leak — only "Investment analysis is incomplete", the six required inputs, and the four verified facts. CSV `overall_score`/`irr` empty; XLSX has no "Workbook Output" sheet.
+
+**Tests:** `test_analysis_gating.py` (7) proves an incomplete property exposes no default scores/returns/conclusions via memo, CSV, XLSX, or PDF, while a property with the required inputs still receives normal analysis; frontend adds memo-panel + KPI gating tests; e2e asserts the memo leaks no defaults. Suites: **backend 65, frontend build/lint/16, Playwright 16** — all green.
+
+**Remaining places default/synthetic data could reach the user:** none found for the analysis-incomplete state after this pass. When analysis **is** complete (asking price provided), workbook results are shown normally (by design). Non-financial synthetic values still shown with their own caveats: enrichment provider fallbacks are labeled unavailable; FEMA/demographics disclose why they're missing.
+
+---
+
+## Acceptance fix — valid address reported "Import failed" / "incomplete"; financial-failure gating
+
+A full US address (`139 County Route 21c, Ghent, NY 12075`) entered in the pipeline **Import & analyze** box returned **"Import failed"** and then an incomplete-listing banner. Root causes (both general, reproduced in-browser):
+
+1. **Duplicate treated as failure.** The pipeline import handler (`DashboardPage.importProperty`) sent the correct full `raw_address`; the backend correctly returned **409** (the property already existed), but the handler did `if (!response.ok) throw 'Import failed'` — so an *already-imported* address surfaced as a hard error instead of opening the existing property. (Discovery's box handled 409; the pipeline box did not.) Fixed by unifying both boxes on a shared `buildImportBody` classifier and handling **409 → open existing / 422 → clear message**. A valid address now imports once and opens the property; a re-entry opens the same record — never "Import failed", never an unresolved duplicate, never a "Resolve" prompt.
+2. **Geocoded address left "incomplete".** When the naive comma-parser couldn't extract a locality it stored `Unknown/NA`, and the live geocoder resolved coordinates/county but **never backfilled city/state** — so a geocodable address stayed flagged incomplete. Fixed: the Census geocoder now **backfills city/state/ZIP from the authoritative match** (placeholders only, never user values) and excludes placeholder locality from its query; import decides resolution **after** enrichment. The API also normalizes whitespace-only identifiers to reject empty imports.
+
+**Financial-failure gating (presentation only — no underwriting change).** When identity is unresolved or the critical inputs for property-specific underwriting are absent, the app no longer displays default-workbook outputs as if they were results (Overall 71/100, $418k cash, 19.3% CoC, 22.3% IRR, 22.4% cap, 3.59× DSCR, $172.5k renovation). Those areas — the hero KPI row, the Overview score/financial summary, and the Financials/Underwriting/Renovation tabs — are replaced with an explicit **"Analysis incomplete"** state listing exactly what is required (asking price, taxes, acreage, beds/baths, sq ft, and a resolved address). Numbers reappear automatically once the inputs exist. The underwriting engine, weights, thresholds, and workbook logic are untouched.
+
+**Manual verification** (`139 County Route 21c, Ghent, NY 12075`, both import boxes): opens property id=5 with **no "Import failed"** and **no incomplete banner**; status **Reviewing**. Populated (live/verifiable): matched address `139 CO RD 21C, GHENT, NY, 12075`, city **Ghent**, state **NY**, ZIP **12075**, county **Columbia**, coordinates **42.2612 / −73.6057**, census tract 000700, **elevation 741.1 ft** (USGS). Unavailable (disclosed, not invented): **FEMA flood** — public NFHL service returning error 400 (temporarily rate-limited); **ACS demographics** — needs a free `census_api_key`; assessor/parcel/zoning/STR/schools/walkability/routing/places — need their keys. Property facts (price, taxes, beds/baths, acreage) have no free source and stay empty. **Confidence ≈ 5/100**; financial results correctly gated as "Analysis incomplete".
+
+**Tests added:** backend regression classes — full address, abbreviated road forms (`Co Rd`, `County Route`, `State Route`), duplicate re-entry (409 + id), partial address (incomplete), full-address listing URL, invalid/whitespace/malformed input, geocoder locality backfill. Frontend — `buildImportBody` classification, pipeline-box duplicate opens existing (no "Import failed"), analysis-incomplete gating. E2e — pipeline-box duplicate opens the property; the punctuation-variant test updated to the corrected open-existing behavior. Suites: **backend 58, frontend build/lint/15, Playwright 16** — all green.
+
+---
+
 # Release Notes — Core User Journey
 
 Branch: `fix/core-user-journey`
@@ -69,20 +104,38 @@ universal address import → detail; estimate labeling; zpid-only incomplete →
 
 ---
 
+## Enrichment redesign — automatic live coverage
+
+Goal: a normal address should auto-populate the maximum *verifiable* coverage on import, with no manual steps and nothing invented.
+
+- **Keyless public providers run automatically.** `live_providers_enabled` now defaults **on** (set explicitly in `docker-compose.yml`; the pytest suite sets it `false` via `conftest.py` to stay hermetic). On import, keyless government sources run with no configuration: the **U.S. Census geocoder/geographies**, **FEMA NFHL flood**, and a new **USGS EPQS elevation** adapter.
+- **One geocoder call populates the record.** The geocoder switched to `/geographies/onelineaddress`, so a single keyless request resolves coordinates **and** census geographies. Verified `latitude`, `longitude`, `postal_code`, and `county` are persisted onto the property (never overwriting user-entered values), and the tract is reused in-run by the demographics adapter.
+- **Honest credential gating.** The ACS *data* API now requires a free Census key, so `census_demographics` self-gates on `census_api_key` (and actually sends it) — genuinely unavailable, with an actionable reason, until configured. Google routing/places remain gated on their keys.
+- **Resilient, non-poisoning HTTP.** FEMA's public ArcGIS endpoint intermittently returns an HTTP-200 error envelope; these are now surfaced as a clear, retryable provider error (not a vague "malformed" or a fabricated determination) and are **not cached**, so a transient failure no longer pins for the cache TTL. Transient failures refresh their reason; a previously-live fact is still preserved across a blip.
+- **Verified against the real address.** `139 County Route 21c, Ghent, NY` now resolves to `139 CO RD 21C, GHENT, NY, 12075`, county **Columbia**, coords `42.2612, -73.6057`, elevation ~741 ft — all live/verifiable. Demographics (needs the free key) and FEMA (rate-limited during testing) are disclosed as unavailable, not invented. Confidence rose from 0 → ~5 on real coverage.
+
+**Underwriting untouched:** no change to formulas, weights, thresholds, hard constraints, or scoring. Enrichment only supplies facts and provenance.
+
+New tests (backend): geocoder locality/geography population and no-overwrite; elevation parsing; demographics key gating; FEMA error-envelope disclosure; error envelopes are not cached. Suite: **51 passing**, hermetic.
+
+---
+
 ## Remaining known limitations
 
-1. **URL parsing is heuristic, not a licensed feed.** Land/parcel URLs (LandWatch) and zpid-only Zillow links legitimately carry no street address, so they are marked incomplete (correct, not fabricated) and require Resolve. Facts (beds/baths/price/flood/comps) still need enrichment providers.
-2. **Live enrichment providers are unconfigured by default** (`live_providers_enabled=false`), so enrichment, valuation, and live comparables are unavailable — disclosed in the UI, never invented. Configure credentials to populate them.
-3. **Financials are workbook estimates until inputs are entered.** With no asking price, figures come from the default scenario and are labeled as estimates; enter asking price/taxes for property-specific returns.
-4. **"Investment Score" and "Risk Score" are not separate model outputs.** Represented honestly by the Buy score and by the Risk summary / hard-constraint list rather than invented numbers.
-5. **Legacy `Unknown/NA` rows** are now flagged incomplete with a Resolve action but retain their original stored names until resolved (no destructive backfill was performed).
-6. **Naive CSV escaping** and unbounded listing accumulation from the prior pass are unchanged. *(Low)*
-7. **`PropertyDetailPage.tsx` remains a large `@ts-nocheck` module.** Grew with this work; a future split is warranted.
+1. **URL parsing is heuristic, not a licensed feed.** Land/parcel URLs (LandWatch) and zpid-only Zillow links legitimately carry no street address, so they are marked incomplete (correct, not fabricated) and require Resolve.
+2. **Property facts (price, taxes, beds/baths, acreage) have no free public source** and remain empty for address-only imports — they need a listing/assessor feed or manual entry, and are never invented. Free keyless enrichment covers location, county, tract, ZIP, elevation, and (when the service is up) flood status.
+3. **Some providers need free/paid keys:** ACS demographics needs a free Census key; Google routing/places, assessor, parcel, zoning, STR, schools, and walkability need their respective keys. All are honestly "unavailable" until configured.
+4. **FEMA's public NFHL service is rate-limited/flaky.** It returns real flood determinations when healthy but was erroring during testing; the flood field is disclosed as temporarily unavailable and repopulates on refresh once the service recovers.
+5. **Financials are workbook estimates until inputs are entered.** With no asking price, figures come from the default scenario and are labeled as estimates; enter asking price/taxes for property-specific returns.
+6. **"Investment Score" and "Risk Score" are not separate model outputs.** Represented honestly by the Buy score and by the Risk summary / hard-constraint list rather than invented numbers.
+7. **Legacy `Unknown/NA` rows** are now flagged incomplete with a Resolve action but retain their original stored names until resolved (no destructive backfill was performed).
+8. **Naive CSV escaping** and unbounded listing accumulation from the prior pass are unchanged. *(Low)*
+9. **`PropertyDetailPage.tsx` remains a large `@ts-nocheck` module.** Grew with this work; a future split is warranted.
 
 ---
 
 ## Suggested next priorities
 1. Wire `pytest` + `vitest` + `playwright` into CI so these journeys are guarded automatically.
-2. Configure at least the free public providers (Census geocoder/ACS, FEMA) so imports geocode and coverage rises without paid feeds.
+2. Add a free Census API key (and optionally Google routing/places keys) to unlock demographics and drive-time coverage on top of the now-automatic keyless providers.
 3. Split `PropertyDetailPage.tsx` and remove `@ts-nocheck`.
 4. Optional server-side address canonicalization (street-suffix expansion) behind tests to strengthen dedup further.

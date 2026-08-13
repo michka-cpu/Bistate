@@ -1,6 +1,11 @@
 /* eslint-disable no-undef */
 // @ts-nocheck
+import { AnalysisIncomplete } from './AnalysisIncomplete'
+import { analysisIncomplete } from '../lib/analysis'
+
 export function KpiGrid({ property }: { property: Property }) {
+  // Never present default-workbook figures as this property's KPIs.
+  if (analysisIncomplete(property)) return <AnalysisIncomplete property={property} heading="Key metrics — analysis incomplete" context="scores, cash required, cap rate, cash-on-cash, IRR, and DSCR" />
   const output = property.underwriting_output
   const dashboard = output?.dashboard ?? {}
   const capRate = dashboard.noi_before_debt && dashboard.purchase_price ? dashboard.noi_before_debt / dashboard.purchase_price : null

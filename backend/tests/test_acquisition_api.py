@@ -31,6 +31,55 @@ def test_import_requires_an_identifier(client: TestClient) -> None:
     assert client.post("/api/properties/import", json={}).status_code == 422
 
 
+# ---- Regression: a normal manually-entered US address must import complete, not "manual/incomplete" ----
+
+def test_full_street_address_with_city_state_zip_is_complete(client: TestClient) -> None:
+    prop = client.post("/api/properties/import", json={"raw_address": "139 County Route 21c, Ghent, NY 12075"}).json()
+    assert prop["listing_incomplete"] is False
+    assert prop["city"] == "Ghent" and prop["state"] == "NY" and prop["postal_code"] == "12075"
+    assert prop["status"] == "Reviewing"
+    assert prop["name"] == "139 County Route 21c"
+
+
+def test_abbreviated_road_forms_parse_completely(client: TestClient) -> None:
+    for address, city, state in [
+        ("88 Co Rd 9, Chatham, NY 12037", "Chatham", "NY"),
+        ("77 County Route 21c, Ghent, NY 12075", "Ghent", "NY"),
+        ("410 State Route 203, Valatie, NY", "Valatie", "NY"),
+        ("12 Old Post Rd, Hudson, NY 12534", "Hudson", "NY"),
+    ]:
+        prop = client.post("/api/properties/import", json={"raw_address": address}).json()
+        assert prop["listing_incomplete"] is False, address
+        assert (prop["city"], prop["state"]) == (city, state), address
+
+
+def test_duplicate_reentry_of_an_imported_address_returns_409_with_id(client: TestClient) -> None:
+    first = client.post("/api/properties/import", json={"raw_address": "5 Diligence Way, Hudson, NY 12534"})
+    assert first.status_code == 201
+    again = client.post("/api/properties/import", json={"raw_address": "5 Diligence Way, Hudson, NY 12534"})
+    assert again.status_code == 409
+    assert f"id={first.json()['id']}" in again.json()["detail"]
+
+
+def test_partial_address_without_locality_is_incomplete(client: TestClient) -> None:
+    prop = client.post("/api/properties/import", json={"raw_address": "139 County Route 21c"}).json()
+    assert prop["listing_incomplete"] is True
+    assert prop["status"] == "Needs Info"
+
+
+def test_full_address_listing_url_imports_complete(client: TestClient) -> None:
+    prop = client.post("/api/properties/import", json={"listing_url": "https://www.zillow.com/homedetails/44-Maple-Ave-Hudson-NY-12534/700123_zpid/"}).json()
+    assert prop["listing_incomplete"] is False
+    assert prop["city"] == "Hudson" and prop["state"] == "NY"
+
+
+def test_invalid_input_is_rejected(client: TestClient) -> None:
+    # Whitespace-only text is not a usable identifier.
+    assert client.post("/api/properties/import", json={"raw_address": "   "}).status_code == 422
+    # A malformed URL fails validation.
+    assert client.post("/api/properties/import", json={"listing_url": "notaurl"}).status_code == 422
+
+
 def test_import_rejects_normalized_duplicate_address_and_url(client: TestClient) -> None:
     payload = {"raw_address": "139 County Route 21C, Ghent, NY"}
     assert client.post("/api/properties/import", json=payload).status_code == 201

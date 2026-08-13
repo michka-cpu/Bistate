@@ -16,6 +16,12 @@ class PropertyImport(BaseModel):
 
     @model_validator(mode="after")
     def require_identifier(self) -> "PropertyImport":
+        # Normalize blank/whitespace-only text fields to None so they cannot masquerade
+        # as a valid identifier and create an empty-named record.
+        if self.raw_address is not None and not self.raw_address.strip():
+            self.raw_address = None
+        if self.mls_number is not None and not self.mls_number.strip():
+            self.mls_number = None
         if not any((self.listing_url, self.raw_address, self.mls_number)):
             raise ValueError("Provide a listing_url, raw_address, or mls_number")
         return self
@@ -75,6 +81,9 @@ class TaskRead(TaskCreate):
 
 class InvestmentMemo(BaseModel):
     property_id: int
+    analysis_incomplete: bool = False
+    required_inputs: list[str] = Field(default_factory=list)
+    verified_facts: list[str] = Field(default_factory=list)
     executive_summary: str
     strengths: list[str]
     weaknesses: list[str]

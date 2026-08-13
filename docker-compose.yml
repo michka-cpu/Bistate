@@ -3,6 +3,13 @@ services:
     build: ./backend
     environment:
       DATABASE_URL: sqlite:///./data/bistate.db
+      # Keyless public providers (Census geocoder/geographies, FEMA flood, USGS
+      # elevation) run automatically so a normal address auto-populates on import.
+      LIVE_PROVIDERS_ENABLED: "true"
+      # Optional free keys unlock more coverage (never invented when absent):
+      # CENSUS_API_KEY: ""      # ACS tract demographics — https://api.census.gov/data/key_signup.html
+      # ROUTING_API_KEY: ""     # Google Directions (NYC/airport drive times)
+      # PLACES_API_KEY: ""      # Google Places (rail, airport, hospital, grocery)
     volumes:
       - bistate_data:/app/data
     ports:

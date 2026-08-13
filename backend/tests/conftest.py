@@ -2,6 +2,8 @@ import os
 
 os.environ["DATABASE_URL"] = "sqlite:///./test.db"
 os.environ["UPLOAD_DIR"] = "/tmp/bistate-test-uploads"
+# Live public providers default on in the app; keep the suite hermetic (no network).
+os.environ["LIVE_PROVIDERS_ENABLED"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient

@@ -8,7 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.property import Property
-from app.schemas.property import PropertyCreate, PropertyRead, PropertyUpdate
+from app.schemas.property import (
+    PropertyCreate,
+    PropertyRead,
+    PropertyUpdate,
+    property_analysis_incomplete,
+    property_missing_core_inputs,
+)
 from app.schemas.underwriting import UnderwritingInputs, UnderwritingResult
 from app.services.underwriting import calculate
 from app.api.acquisition import router as acquisition_router
@@ -69,9 +75,16 @@ def update_property(property_id: int, payload: PropertyUpdate, db: Session = Dep
 @router.get("/properties/{property_id}/exports/csv", tags=["properties"])
 def export_property_csv(property_id: int, db: Session = Depends(get_db)) -> StreamingResponse:
     prop = _get_property_or_404(property_id, db)
-    output = BytesIO(); text = output.write
-    # CSV is generated from persisted values only.
-    rows = [["property_id", "name", "address", "status", "asking_price", "overall_score", "irr"], [prop.id, prop.name, prop.address, prop.status, prop.asking_price or "", prop.overall_score or "", (prop.underwriting_output or {}).get("projection", {}).get("levered_irr", "")]]
+    # CSV is generated from persisted values only, and never exposes default-workbook
+    # score/return figures while the analysis is incomplete.
+    incomplete = property_analysis_incomplete(prop)
+    overall_score = "" if incomplete else (prop.overall_score if prop.overall_score is not None else "")
+    irr = "" if incomplete else (prop.underwriting_output or {}).get("projection", {}).get("levered_irr", "")
+    analysis_state = "analysis incomplete" if incomplete else "analysis complete"
+    rows = [
+        ["property_id", "name", "address", "status", "analysis_state", "asking_price", "overall_score", "irr"],
+        [prop.id, prop.name, prop.address, prop.status, analysis_state, prop.asking_price or "", overall_score, irr],
+    ]
     content = "\n".join(",".join(str(value).replace(",", " ") for value in row) for row in rows).encode()
     return StreamingResponse(iter([content]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=property-{prop.id}-summary.csv"})
 
@@ -113,10 +126,23 @@ def export_property_workbook_summary(property_id: int, db: Session = Depends(get
     """Export persisted listing and workbook output; no absent values are invented."""
     from openpyxl import Workbook
     prop = _get_property_or_404(property_id, db)
+    incomplete = property_analysis_incomplete(prop)
     workbook = Workbook(); sheet = workbook.active; sheet.title = "Property Summary"
     sheet.append(["Field", "Value"])
-    for key, value in [("Property", prop.name), ("Address", prop.address), ("Status", prop.status), ("Asking price", prop.asking_price), ("Overall score", prop.overall_score)]: sheet.append([key, value])
-    output_sheet = workbook.create_sheet("Workbook Output"); output_sheet.append(["Metric", "Value"])
-    for key, value in (prop.underwriting_output or {}).get("dashboard", {}).items(): output_sheet.append([key, value])
+    summary = [("Property", prop.name), ("Address", prop.address), ("Status", prop.status), ("Asking price", prop.asking_price)]
+    # Withhold the default-workbook score until analysis is property-specific.
+    summary.append(("Overall score", "Analysis incomplete" if incomplete else prop.overall_score))
+    for key, value in summary:
+        sheet.append([key, value])
+    if incomplete:
+        note_sheet = workbook.create_sheet("Analysis Incomplete")
+        note_sheet.append(["Status", "Analysis incomplete — default workbook results withheld"])
+        note_sheet.append(["Required input", ""])
+        for key in property_missing_core_inputs(prop):
+            note_sheet.append([key.replace("_", " "), "required"])
+    else:
+        output_sheet = workbook.create_sheet("Workbook Output"); output_sheet.append(["Metric", "Value"])
+        for key, value in (prop.underwriting_output or {}).get("dashboard", {}).items():
+            output_sheet.append([key, value])
     output = BytesIO(); workbook.save(output); output.seek(0)
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=property-{prop.id}-workbook-summary.xlsx"})

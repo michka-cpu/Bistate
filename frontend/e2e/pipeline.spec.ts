@@ -21,7 +21,7 @@ test.describe('Acquisition pipeline', () => {
     await expect(page.getByTestId('export-xlsx')).toHaveAttribute('href', /\/exports\/xlsx$/)
   })
 
-  test('rejects a duplicate address that differs only by punctuation', async ({ page }) => {
+  test('a punctuation-variant of an imported address opens the existing property (no error)', async ({ page }) => {
     await page.goto('/')
     await page.getByRole('button', { name: 'Open pipeline' }).click()
     const base = uniqueAddress()
@@ -31,11 +31,13 @@ test.describe('Acquisition pipeline', () => {
     await page.getByRole('button', { name: 'Import & analyze' }).click()
     await expect(page.locator('.property-hero h1')).toContainText(base.split(',')[0])
 
-    // Re-import the same address with a trailing period; the UI should surface the conflict.
+    // Re-import the same address with a trailing period: it is the same property, so the UI
+    // must open the existing record — not report "Import failed" (the reported regression).
     const punctuated = base.replace('Way,', 'Way.,')
     await importField.fill(punctuated)
     await page.getByRole('button', { name: 'Import & analyze' }).click()
-    await expect(page.locator('.error-banner')).toBeVisible()
+    await expect(page.locator('.property-hero h1')).toContainText(base.split(',')[0])
+    await expect(page.getByText('Import failed')).toHaveCount(0)
   })
 
   test('Property Intelligence loads for a property that has acreage', async ({ page, request }) => {

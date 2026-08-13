@@ -7,7 +7,7 @@ from app.database import get_db
 from app.models.property import Property
 from app.models.acquisition import PropertyActivityEvent
 from app.schemas.acquisition import InvestmentMemo, PropertyImport
-from app.schemas.property import PropertyRead
+from app.schemas.property import PropertyRead, property_listing_incomplete
 from app.schemas.underwriting import UnderwritingResult
 from app.services.acquisition import build_investment_memo, underwrite_property
 from app.services.enrichment import enrich_property, provider_health
@@ -48,10 +48,12 @@ def import_property(payload: PropertyImport, db: Session = Depends(get_db)) -> P
     db.add(prop)
     db.flush()
     _run_pipeline(prop)
-    message = "Property imported (listing information incomplete)" if listing.needs_resolution else "Property imported"
+    # Resolution is judged AFTER enrichment: live geocoding can backfill a locality the
+    # parser could not, so a valid street address is not left flagged as incomplete.
+    unresolved = _locality_unresolved(prop)
+    message = "Property imported (listing information incomplete)" if unresolved else "Property imported"
     db.add(PropertyActivityEvent(property_id=prop.id, event_type="imported", message=message))
-    # An unresolved listing needs an address before diligence can be trusted.
-    prop.status = "Needs Info" if listing.needs_resolution else "Reviewing"
+    prop.status = "Needs Info" if unresolved else "Reviewing"
     db.commit()
     db.refresh(prop)
     return prop
@@ -156,6 +158,13 @@ def _run_pipeline(prop: Property, refresh: bool = False) -> None:
     prop.pipeline_state["underwrite"] = "completed"
     prop.pipeline_state["memo"] = "completed"
     prop.activity_events.append(PropertyActivityEvent(event_type="refreshed" if refresh else "analyzed", message="Analysis completed"))
+
+
+def _locality_unresolved(prop: Property) -> bool:
+    """True when the record still lacks a real city/state after enrichment — the same
+    signal the API exposes as ``listing_incomplete``. A geocoded street address with a
+    resolved locality is considered complete regardless of the initial parse."""
+    return property_listing_incomplete(prop)
 
 
 def _normalize_address(value: str | None) -> str:

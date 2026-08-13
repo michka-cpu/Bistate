@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -55,7 +56,11 @@ class JsonHttpClient:
                 request = Request(url, headers={"Accept": "application/json", "User-Agent": "Bistate/1.0"})
                 with urlopen(request, timeout=settings.provider_timeout_seconds) as response:  # nosec B310: configured public APIs
                     result = json.loads(response.read().decode())
-                    self._cache[cache_key] = (time.monotonic() + settings.provider_cache_seconds, result)
+                    # Do not cache ArcGIS/JSON error envelopes (HTTP 200 with an "error"
+                    # key), or a transient provider failure would be pinned for the whole
+                    # cache TTL and defeat the refresh/retry path.
+                    if not (isinstance(result, dict) and "error" in result):
+                        self._cache[cache_key] = (time.monotonic() + settings.provider_cache_seconds, result)
                     return result
             except HTTPError as exc:
                 if exc.code == 429 and attempt < settings.provider_retry_count:
@@ -79,18 +84,62 @@ class Provider(Protocol):
     def fetch(self, prop: Property) -> dict[str, Any]: ...
 
 
+def _clean_county(name: str | None) -> str | None:
+    """Return a county name without the trailing 'County'/'Parish' descriptor."""
+    if not name: return None
+    return re.sub(r"\s+(County|Parish|Borough|Census Area)$", "", name.strip(), flags=re.IGNORECASE) or None
+
+
+def _is_placeholder_city(value: str | None) -> bool:
+    return (value or "").strip() in ("", "Unknown")
+
+
+def _is_placeholder_state(value: str | None) -> bool:
+    return (value or "").strip().upper() in ("", "NA")
+
+
 class CensusGeocoder:
+    """Keyless public geocoder. A single request resolves coordinates *and* census
+    geographies (county, tract, ZIP), which are persisted onto the property so a normal
+    address auto-populates its structured identity."""
     key, source, required_setting = "geocoding", "U.S. Census Geocoder", None
     def fetch(self, prop: Property) -> dict[str, Any]:
         if not get_settings().live_providers_enabled: return unavailable("Live public providers are disabled")
-        address = ", ".join(filter(None, [prop.address, prop.city, prop.state, prop.postal_code]))
-        data = HTTP.get("https://geocoding.geo.census.gov/geocoder/locations/onelineaddress", {"address": address, "benchmark": "Public_AR_Current", "format": "json"})
+        # Build the query from the street plus only *real* locality values. Placeholder
+        # city/state (Unknown/NA left by an imperfect parse) would otherwise pollute the
+        # query and prevent a match, so they are dropped and the geocoder recovers them.
+        query_city = None if _is_placeholder_city(prop.city) else prop.city
+        query_state = None if _is_placeholder_state(prop.state) else prop.state
+        address = ", ".join(filter(None, [prop.address, query_city, query_state, prop.postal_code]))
+        data = HTTP.get("https://geocoding.geo.census.gov/geocoder/geographies/onelineaddress", {"address": address, "benchmark": "Public_AR_Current", "vintage": "Current_Current", "format": "json"})
         matches = data.get("result", {}).get("addressMatches", [])
         if not matches: return unavailable("Address was not matched by the U.S. Census Geocoder")
-        coordinates = matches[0].get("coordinates", {})
+        match = matches[0]
+        coordinates = match.get("coordinates", {})
         if not {"x", "y"} <= coordinates.keys(): return unavailable("Geocoder response did not include coordinates")
         prop.longitude, prop.latitude = coordinates["x"], coordinates["y"]
-        return live({"latitude": prop.latitude, "longitude": prop.longitude, "geographies": matches[0].get("addressComponents", {})}, self.source, 0.95)
+        components = match.get("addressComponents", {})
+        geographies = match.get("geographies", {})
+        county_name = ((geographies.get("Counties") or [{}])[0]).get("NAME")
+        tract = (geographies.get("Census Tracts") or [{}])[0]
+        subdivision = ((geographies.get("County Subdivisions") or [{}])[0]).get("NAME")
+        # Backfill verified structured facts from the authoritative match. Placeholder
+        # locality values are corrected; real user-entered values are never overwritten.
+        zip_code = components.get("zip")
+        matched_city, matched_state = components.get("city"), components.get("state")
+        if zip_code and not prop.postal_code: prop.postal_code = zip_code
+        if matched_city and _is_placeholder_city(prop.city): prop.city = matched_city.title()
+        if matched_state and _is_placeholder_state(prop.state): prop.state = matched_state.upper()[:2]
+        cleaned_county = _clean_county(county_name)
+        if cleaned_county and not prop.county: prop.county = cleaned_county
+        # Stash the resolved geography so the demographics adapter can reuse it in-run.
+        prop._census_geography = {"state": tract.get("STATE"), "county": tract.get("COUNTY"), "tract": tract.get("TRACT")}  # type: ignore[attr-defined]
+        return live({
+            "latitude": prop.latitude, "longitude": prop.longitude,
+            "matched_address": match.get("matchedAddress"),
+            "zip": zip_code, "county": cleaned_county, "town": subdivision,
+            "census_tract": tract.get("TRACT"), "state_fips": tract.get("STATE"), "county_fips": tract.get("COUNTY"),
+        }, self.source, 0.95)
 
 
 class FemaFloodProvider:
@@ -100,9 +149,14 @@ class FemaFloodProvider:
         if not get_settings().live_providers_enabled: return unavailable("Live public providers are disabled")
         if prop.latitude is None or prop.longitude is None: return unavailable("Latitude and longitude are required for FEMA flood lookup")
         point = f"{prop.longitude},{prop.latitude}"
-        data = HTTP.get(self.url, {"geometry": point, "geometryType": "esriGeometryPoint", "inSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outFields": "FLD_ZONE,FLD_ZONE_SUBTY,SFHA_TF", "returnGeometry": "false", "f": "json"})
+        data = HTTP.get(self.url, {"geometry": point, "geometryType": "esriGeometryPoint", "inSR": 4326, "outSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outFields": "FLD_ZONE,FLD_ZONE_SUBTY,SFHA_TF", "returnGeometry": "false", "f": "json"})
+        # FEMA's public NFHL ArcGIS endpoint returns HTTP 200 with an {"error": …}
+        # envelope when it is rate-limiting or degraded; surface that honestly (and
+        # retryably) rather than reporting a generic "malformed" response.
+        if isinstance(data, dict) and data.get("error"):
+            raise ProviderError(f"FEMA flood service is temporarily unavailable (error {data['error'].get('code', '')})")
         features = data.get("features")
-        if not isinstance(features, list): return unavailable("Malformed FEMA flood response")
+        if not isinstance(features, list): raise ProviderError("FEMA flood response did not include features")
         if not features: return live({"flood_zone": None, "flood_risk": "outside_mapped_special_flood_hazard_area", "map_panel": None}, self.source, 0.8)
         attrs = features[0].get("attributes", {})
         zone = attrs.get("FLD_ZONE")
@@ -110,17 +164,19 @@ class FemaFloodProvider:
 
 
 class CensusDemographicsProvider:
-    key, source, required_setting = "census_demographics", "U.S. Census Bureau ACS 5-Year API", None
+    """ACS 5-year tract demographics. The ACS *data* API now requires a free Census key
+    (the geocoder/geographies calls remain keyless), so this adapter is honestly
+    unavailable until ``census_api_key`` is configured."""
+    key, source, required_setting = "census_demographics", "U.S. Census Bureau ACS 5-Year API", "census_api_key"
     def fetch(self, prop: Property) -> dict[str, Any]:
-        if not get_settings().live_providers_enabled: return unavailable("Live public providers are disabled")
+        settings = get_settings()
+        if not settings.live_providers_enabled: return unavailable("Live public providers are disabled")
+        if not settings.census_api_key: return unavailable("A free Census API key is required for ACS demographics (set census_api_key)")
         if prop.latitude is None or prop.longitude is None: return unavailable("Latitude and longitude are required for Census geography lookup")
-        geo = HTTP.get("https://geocoding.geo.census.gov/geocoder/geographies/coordinates", {"x": prop.longitude, "y": prop.latitude, "benchmark": "Public_AR_Current", "vintage": "Current_Current", "format": "json"})
-        geos = geo.get("result", {}).get("geographies", {})
-        tract = (geos.get("Census Tracts") or [{}])[0]
-        state, county, tract_code = tract.get("STATE"), tract.get("COUNTY"), tract.get("TRACT")
+        state, county, tract_code = self._resolve_geography(prop)
         if not all((state, county, tract_code)): return unavailable("Census tract was not available for coordinates")
         variables = "NAME,B01003_001E,B19013_001E,B01002_001E,B25002_001E,B25003_002E,B25003_003E"
-        rows = HTTP.get("https://api.census.gov/data/2023/acs/acs5", {"get": variables, "for": f"tract:{tract_code}", "in": [f"state:{state}", f"county:{county}"]})
+        rows = HTTP.get("https://api.census.gov/data/2023/acs/acs5", {"get": variables, "for": f"tract:{tract_code}", "in": [f"state:{state}", f"county:{county}"], "key": settings.census_api_key})
         if not isinstance(rows, list) or len(rows) < 2: return unavailable("Census ACS response contained no tract data")
         headers, values = rows[0], rows[1]; record = dict(zip(headers, values))
         def number(key: str) -> int | None:
@@ -128,6 +184,31 @@ class CensusDemographicsProvider:
             except (KeyError, TypeError, ValueError): return None
         occupied, owner, renter = number("B25002_001E"), number("B25003_002E"), number("B25003_003E")
         return live({"geography": {"state": state, "county": county, "tract": tract_code}, "population": number("B01003_001E"), "median_household_income": number("B19013_001E"), "median_age": number("B01002_001E"), "housing_occupancy": occupied, "owner_occupied": owner, "renter_occupied": renter}, self.source, 0.9)
+
+    @staticmethod
+    def _resolve_geography(prop: Property) -> tuple[str | None, str | None, str | None]:
+        # Reuse the geography the geocoder already resolved this run, if present.
+        cached = getattr(prop, "_census_geography", None)
+        if cached and all(cached.get(part) for part in ("state", "county", "tract")):
+            return cached["state"], cached["county"], cached["tract"]
+        geo = HTTP.get("https://geocoding.geo.census.gov/geocoder/geographies/coordinates", {"x": prop.longitude, "y": prop.latitude, "benchmark": "Public_AR_Current", "vintage": "Current_Current", "format": "json"})
+        tract = ((geo.get("result", {}).get("geographies", {}) or {}).get("Census Tracts") or [{}])[0]
+        return tract.get("STATE"), tract.get("COUNTY"), tract.get("TRACT")
+
+
+class ElevationProvider:
+    """Keyless USGS elevation point query — verifiable terrain context for any coordinate."""
+    key, source, required_setting = "elevation", "USGS EPQS (The National Map)", None
+    url = "https://epqs.nationalmap.gov/v1/json"
+    def fetch(self, prop: Property) -> dict[str, Any]:
+        if not get_settings().live_providers_enabled: return unavailable("Live public providers are disabled")
+        if prop.latitude is None or prop.longitude is None: return unavailable("Latitude and longitude are required for elevation lookup")
+        data = HTTP.get(self.url, {"x": prop.longitude, "y": prop.latitude, "units": "Feet", "wkid": 4326, "includeDate": "false"})
+        try:
+            elevation = round(float(data.get("value")), 1)
+        except (TypeError, ValueError):
+            return unavailable("Elevation service did not return a numeric value")
+        return live({"elevation_feet": elevation, "datum": "NAVD88"}, self.source, 0.85)
 
 
 class ConfiguredProvider:
@@ -214,7 +295,7 @@ class GooglePlacesProvider:
             value["drive_time_reason"] = "Routing provider credentials are not configured"
         return live(value, self.source, 0.85)
 
-PROVIDERS: list[Provider] = [CensusGeocoder(), FemaFloodProvider(), CensusDemographicsProvider(), ConfiguredProvider("county_assessor", "County assessor feed", "assessor_api_key"), ConfiguredProvider("parcel_data", "Parcel data provider", "parcel_api_key"), ConfiguredProvider("parcel_information", "County parcel provider", "parcel_api_key"), ConfiguredProvider("school_ratings", "School ratings provider", "schools_api_key"), ConfiguredProvider("zoning", "County zoning provider", "zoning_api_key"), ConfiguredProvider("str_regulations", "STR regulations provider", "str_regulations_api_key"), GoogleRoutingProvider(), GooglePlacesProvider("nearest_amtrak", "train_station", "passenger train station", "Amtrak"), GooglePlacesProvider("restaurant_hub", "restaurant", "restaurant hub", "restaurants"), GooglePlacesProvider("nearest_airport", "airport", "commercial airport"), GooglePlacesProvider("hospital_distance", "hospital", "hospital"), GooglePlacesProvider("grocery_distance", "supermarket", "grocery store"), ConfiguredProvider("airport_drive_time", "Google Maps Directions API", "routing_api_key"), ConfiguredProvider("walkability", "Walkability provider", "walkscore_api_key"), SuitabilityProvider("wedding_suitability", _wedding), SuitabilityProvider("airbnb_suitability", _airbnb), ConfiguredProvider("airbnb_intelligence", "STR market-data provider", "airdna_api_key"), ConfiguredProvider("wedding_venue", "Property and local-permit diligence", None)]
+PROVIDERS: list[Provider] = [CensusGeocoder(), FemaFloodProvider(), ElevationProvider(), CensusDemographicsProvider(), ConfiguredProvider("county_assessor", "County assessor feed", "assessor_api_key"), ConfiguredProvider("parcel_data", "Parcel data provider", "parcel_api_key"), ConfiguredProvider("parcel_information", "County parcel provider", "parcel_api_key"), ConfiguredProvider("school_ratings", "School ratings provider", "schools_api_key"), ConfiguredProvider("zoning", "County zoning provider", "zoning_api_key"), ConfiguredProvider("str_regulations", "STR regulations provider", "str_regulations_api_key"), GoogleRoutingProvider(), GooglePlacesProvider("nearest_amtrak", "train_station", "passenger train station", "Amtrak"), GooglePlacesProvider("restaurant_hub", "restaurant", "restaurant hub", "restaurants"), GooglePlacesProvider("nearest_airport", "airport", "commercial airport"), GooglePlacesProvider("hospital_distance", "hospital", "hospital"), GooglePlacesProvider("grocery_distance", "supermarket", "grocery store"), ConfiguredProvider("airport_drive_time", "Google Maps Directions API", "routing_api_key"), ConfiguredProvider("walkability", "Walkability provider", "walkscore_api_key"), SuitabilityProvider("wedding_suitability", _wedding), SuitabilityProvider("airbnb_suitability", _airbnb), ConfiguredProvider("airbnb_intelligence", "STR market-data provider", "airdna_api_key"), ConfiguredProvider("wedding_venue", "Property and local-permit diligence", None)]
 
 
 def is_stale(item: dict[str, Any], reference: datetime | None = None) -> bool:
@@ -248,9 +329,11 @@ def enrich_property(prop: Property, refresh: bool = False) -> tuple[dict[str, di
                 diagnostic["most_recent_success"] = result.get("last_updated")
         except Exception as exc:
             logger.warning("enrichment_provider_failed", extra={"provider": provider.key, "property_id": prop.id, "error": str(exc)})
-            # A transient provider failure must not destroy a previously persisted
-            # live fact; retain it and expose the failure separately on the record.
-            output[provider.key] = cached if cached else unavailable(str(exc) if isinstance(exc, ProviderError) else "Provider request failed", provider.source)
+            # A transient provider failure must not destroy a previously persisted *live*
+            # fact; retain that. But when the prior value was itself unavailable, refresh
+            # its reason with the current error instead of pinning a stale message.
+            reason = str(exc) if isinstance(exc, ProviderError) else "Provider request failed"
+            output[provider.key] = cached if (cached and cached.get("value") is not None) else unavailable(reason, provider.source)
             errors[provider.key] = {"message": str(exc), "at": now().isoformat()}
             PROVIDER_DIAGNOSTICS.setdefault(provider.key, {}).update({"most_recent_failure": errors[provider.key]["at"], "failure_reason": str(exc), "latency_ms": round((time.monotonic() - started) * 1000, 1)})
     return output, errors
