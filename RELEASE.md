@@ -1,5 +1,36 @@
 # Release Notes
 
+## Property Intelligence — keyless automatic enrichment from verified coordinates
+
+Fixes the diagnosed "0% completeness even with a verified address" problem. Property Intelligence now measures the facts Bistate actually holds and auto-retrieves location diligence from coordinates with **no API keys**.
+
+**What now populates automatically (keyless), the moment an address geocodes:**
+- **Identity (U.S. Census Geocoder / USGS):** verified address, coordinates, county, census tract, elevation. These were already retrieved but were *excluded* from completeness — now counted.
+- **Access & amenities (OpenStreetMap Overpass + OSRM public routing):** NYC driving time, nearest train station, nearest airport (+ drive time), restaurants, grocery, hospital, pharmacy, hardware store, ski access, beach/marina access, nearest school — nearest of each with straight-line + road distance and drive time. One combined Overpass query + one OSRM table call per property; results memoized so the per-field providers don't re-hit the network.
+- **FEMA flood** stays keyless and is now **retried with backoff** across its intermittent rate-limit envelopes (never a fabricated determination).
+- **Property facts** (acreage, taxes, HOA) surface from listing/user input with their provenance.
+
+**Provenance per field:** every fact records its `kind` (auto / needs-key / manual), source, retrieval status, and confidence. Listing-derived facts show `Listing (<provider>)`; keyless facts show their public source (e.g. `OpenStreetMap (Overpass) + OSRM`).
+
+**Completeness reworked (no scoring change):** `Data Completeness` is now *automatic (keyless) coverage* = keyless facts retrieved ÷ keyless facts attempted, so verified facts count. Credentialed (`keyed`) and `manual` diligence are tracked separately (`N/M unlock with an API key`, `N manual diligence`). Fields reconciled 1:1 with providers (fixed `school_ratings`/`school_district`, `parcel_information`/`parcel_data` mismatches); every displayed field maps to a real provider, a derived fact, or an explicit manual item.
+
+**Providers → keyless (Google Directions/Places replaced):** the access layer now uses OSM/OSRM instead of Google, so it works without keys. `census_demographics` (free Census key), parcel/assessor/zoning/STR/school-ratings/walkability/AirDNA remain honest `Provider not configured` connectors that unlock with a credential. Wetlands, utilities, permits, tax/assessment history remain explicit manual diligence.
+
+**Before → after Property Intelligence coverage (real test properties, this run):**
+| Property | Before | After |
+|---|---|---|
+| `359 Main Street, Catskill, NY` (browser-verified) | 0% (0 verified) | **80%** — 16/20 auto (address, coords, Greene County, tract, elevation, + all 11 access facts) |
+| `314 Oak Knl, Hildebran, NC` (Redfin listing) | 0% | **75%** — 15/20 auto |
+| Address imports (Kingston / Rhinebeck / Catskill / NYC) | 0% | **25–80%** — always ≥25% identity floor (address, coords, county, tract, elevation) |
+
+**Still requires credentials:** ACS demographics (free `CENSUS_API_KEY`); parcel/assessor, zoning, STR rules, school ratings, walkability, STR market data (paid/jurisdiction keys). **Still manual diligence:** wetlands, slopes, protected land, water/septic/electric/internet, event/permit restrictions, tax & assessment history.
+
+**Known external limitation (transient, self-recovering):** the public Overpass mirrors rate-limit heavy bursts (our own testing exhausted them) and broad queries can be slow; the code rotates mirrors, bounds timeouts, and fails to an honest "not yet retrieved" that the **Refresh intelligence** button re-attempts. The identity/elevation floor (≈25%) is fast and reliable regardless. A future improvement would move the heavy access lookups to a background task so imports never block.
+
+**Guardrails:** no change to underwriting formulas, weights, thresholds, or scoring — scores consume only price/beds/baths/acreage + workbook, never the diligence fields. Tests: backend **77**, migrations clean, frontend build/lint **18**, Playwright **19** (new: keyless OSM access parsing, FEMA retry, coverage counting, verified-facts surfacing, and an e2e asserting Property Intelligence is no longer 0%). Live sites are never used in CI (OSM/OSRM/Overpass are stubbed in tests).
+
+---
+
 ## Listing ingestion — retrieve real listing facts from supported URLs
 
 Before this change, pasting a supported listing URL only parsed the address from the URL slug and geocoded it — it never fetched listing facts, so `asking_price`, `bedrooms`, `bathrooms`, `square_feet`, `property_type`, etc. were always empty and every URL import stayed permanently `analysis_incomplete`. This adds a focused ingestion layer that retrieves **real** listing-level facts from legitimate sources, or fails honestly.

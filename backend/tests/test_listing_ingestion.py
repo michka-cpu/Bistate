@@ -42,8 +42,9 @@ REDFIN_URL = "https://www.redfin.com/NY/Hudson/88-Union-St-12534/home/12345678"
 
 def _enable_live(monkeypatch):
     monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
-    # Keep enrichment (geocoding) hermetic: no real network for the property pipeline.
+    # Keep enrichment (geocoding + OSM/OSRM access) hermetic: no real network.
     monkeypatch.setattr(enrichment.HTTP, "get", lambda *a, **k: {})
+    monkeypatch.setattr(enrichment, "_compute_access", lambda prop: {})
 
 
 # ---- Parser ----

@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 """Resilient, provenance-first live-data provider registry.
 
@@ -149,18 +150,27 @@ class FemaFloodProvider:
         if not get_settings().live_providers_enabled: return unavailable("Live public providers are disabled")
         if prop.latitude is None or prop.longitude is None: return unavailable("Latitude and longitude are required for FEMA flood lookup")
         point = f"{prop.longitude},{prop.latitude}"
-        data = HTTP.get(self.url, {"geometry": point, "geometryType": "esriGeometryPoint", "inSR": 4326, "outSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outFields": "FLD_ZONE,FLD_ZONE_SUBTY,SFHA_TF", "returnGeometry": "false", "f": "json"})
-        # FEMA's public NFHL ArcGIS endpoint returns HTTP 200 with an {"error": …}
-        # envelope when it is rate-limiting or degraded; surface that honestly (and
-        # retryably) rather than reporting a generic "malformed" response.
-        if isinstance(data, dict) and data.get("error"):
-            raise ProviderError(f"FEMA flood service is temporarily unavailable (error {data['error'].get('code', '')})")
-        features = data.get("features")
-        if not isinstance(features, list): raise ProviderError("FEMA flood response did not include features")
-        if not features: return live({"flood_zone": None, "flood_risk": "outside_mapped_special_flood_hazard_area", "map_panel": None}, self.source, 0.8)
-        attrs = features[0].get("attributes", {})
-        zone = attrs.get("FLD_ZONE")
-        return live({"flood_zone": zone, "flood_risk": "special_flood_hazard_area" if attrs.get("SFHA_TF") == "T" else "mapped", "map_panel": attrs.get("FLD_ZONE_SUBTY")}, self.source, 0.9)
+        params = {"geometry": point, "geometryType": "esriGeometryPoint", "inSR": 4326, "outSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outFields": "FLD_ZONE,FLD_ZONE_SUBTY,SFHA_TF", "returnGeometry": "false", "f": "json"}
+        # FEMA's public NFHL ArcGIS endpoint intermittently returns HTTP 200 with an
+        # {"error": …} envelope when rate-limiting or degraded. Retry with backoff before
+        # giving up; a flood determination is never fabricated on failure.
+        last_reason = ""
+        for attempt in range(3):
+            data = HTTP.get(self.url, params)
+            if isinstance(data, dict) and data.get("error"):
+                last_reason = f"error {data['error'].get('code', '')}"
+            elif not isinstance(data.get("features"), list):
+                last_reason = "response did not include features"
+            else:
+                features = data["features"]
+                if not features:
+                    return live({"flood_zone": None, "flood_risk": "outside_mapped_special_flood_hazard_area", "map_panel": None}, self.source, 0.8)
+                attrs = features[0].get("attributes", {})
+                zone = attrs.get("FLD_ZONE")
+                return live({"flood_zone": zone, "flood_risk": "special_flood_hazard_area" if attrs.get("SFHA_TF") == "T" else "mapped", "map_panel": attrs.get("FLD_ZONE_SUBTY")}, self.source, 0.9)
+            if attempt < 2:
+                time.sleep(min(2 ** attempt, 4))
+        raise ProviderError(f"FEMA flood service is temporarily unavailable ({last_reason})")
 
 
 class CensusDemographicsProvider:
@@ -230,72 +240,198 @@ def _wedding(prop: Property) -> int | None: return min(100, round(45 + prop.acre
 def _airbnb(prop: Property) -> int | None: return min(100, round(45 + prop.bedrooms * 7 + (prop.bathrooms or 0) * 4)) if prop.bedrooms is not None else None
 
 
-class GoogleRoutingProvider:
-    """Google Directions adapter for the persisted NYC transportation fact."""
-    key, source, required_setting = "nyc_drive_time", "Google Maps Directions API", "routing_api_key"
-    url = "https://maps.googleapis.com/maps/api/directions/json"
+# ---- Keyless location enrichment: OpenStreetMap (Overpass) POIs + OSRM routing ----
+# Once coordinates exist these run automatically with no API key. A single Overpass query
+# and a single OSRM table call cover every access fact; results are memoized on the
+# property so the per-field providers reuse them without re-hitting the network.
+
+OSM_SOURCE = "OpenStreetMap (Overpass) + OSRM public routing"
+# Multiple public Overpass mirrors: rotate on rate-limit/timeout so a busy primary does
+# not drop location facts. All are the same public OSM data, queried politely.
+OVERPASS_URLS = ["https://overpass-api.de/api/interpreter", "https://overpass.kumi.systems/api/interpreter", "https://overpass.private.coffee/api/interpreter"]
+OSRM_URL = "https://router.project-osrm.org/table/v1/driving"
+NYC_LATLON = (40.7484, -73.9857)  # Midtown Manhattan
+
+# key -> (overpass selectors, radius metres, label, tag matcher)
+# Selectors are kept intentionally light (points/small ways, bounded radii) so a single
+# combined query returns quickly; broad polygon scans (e.g. every lake) are avoided.
+_POI_SPECS: dict[str, tuple[list[str], int, str, Any]] = {
+    "nearest_amtrak": (['nwr["railway"="station"]'], 45000, "train station", lambda t: t.get("railway") == "station"),
+    "nearest_airport": (['nwr["aeroway"="aerodrome"]'], 80000, "airport", lambda t: t.get("aeroway") == "aerodrome"),
+    "restaurant_hub": (['node["amenity"="restaurant"]'], 6000, "restaurant", lambda t: t.get("amenity") == "restaurant"),
+    "grocery_distance": (['nwr["shop"="supermarket"]'], 10000, "grocery store", lambda t: t.get("shop") == "supermarket"),
+    "hospital_distance": (['nwr["amenity"="hospital"]'], 30000, "hospital", lambda t: t.get("amenity") == "hospital"),
+    "pharmacy_distance": (['node["amenity"="pharmacy"]'], 12000, "pharmacy", lambda t: t.get("amenity") == "pharmacy"),
+    "hardware_distance": (['nwr["shop"~"^(hardware|doityourself)$"]'], 20000, "hardware store", lambda t: t.get("shop") in ("hardware", "doityourself")),
+    "ski_access": (['nwr["landuse"="winter_sports"]'], 70000, "ski area", lambda t: t.get("landuse") == "winter_sports"),
+    "water_access": (['nwr["leisure"="marina"]', 'node["natural"="beach"]', 'nwr["natural"="beach"]'], 25000, "beach / marina access", lambda t: t.get("leisure") == "marina" or t.get("natural") == "beach"),
+    "nearest_school": (['nwr["amenity"="school"]'], 15000, "school", lambda t: t.get("amenity") == "school"),
+}
+
+
+def _haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    radius = 3958.7613
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlam / 2) ** 2
+    return radius * 2 * math.asin(math.sqrt(a))
+
+
+def _fetch_json(url: str, timeout: float, data: str | None = None, attempts: int = 1) -> Any:
+    """Dedicated fetch for Overpass/OSRM. Bounded latency: a single attempt by default
+    (mirror rotation is the fallback), never blocking the import on a slow endpoint."""
+    request = Request(url, data=data.encode() if data else None,
+                      headers={"User-Agent": "Bistate/1.0 (real-estate diligence)", "Accept": "application/json"})
+    for attempt in range(attempts):
+        try:
+            with urlopen(request, timeout=timeout) as response:  # nosec B310: public keyless APIs
+                return json.loads(response.read().decode())
+        except HTTPError as exc:
+            if exc.code == 429 and attempt + 1 < attempts:
+                time.sleep(1); continue
+            raise ProviderError(f"HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+            if attempt + 1 < attempts:
+                time.sleep(1); continue
+            raise ProviderError("request failed") from exc
+
+
+def _overpass_around(lat: float, lon: float) -> list[dict[str, Any]]:
+    body = "[out:json][timeout:25];(" + "".join(
+        f"{selector}(around:{radius},{lat},{lon});"
+        for selectors, radius, _, _ in _POI_SPECS.values() for selector in selectors
+    ) + ");out center tags;"
+    data, last_error = None, None
+    for url in OVERPASS_URLS:
+        try:
+            data = _fetch_json(url, 6, data="data=" + quote(body))
+            break
+        except ProviderError as exc:
+            last_error = exc
+    if data is None:
+        raise last_error or ProviderError("Overpass unavailable")
+    elements: list[dict[str, Any]] = []
+    for element in data.get("elements", []):
+        centre = element.get("center") or element
+        if centre.get("lat") is not None and centre.get("lon") is not None:
+            elements.append({"lat": centre["lat"], "lon": centre["lon"], "tags": element.get("tags", {})})
+    return elements
+
+
+def _osrm_table(lat: float, lon: float, destinations: list[tuple[float, float]]) -> tuple[list[Any], list[Any]]:
+    coords = ";".join(f"{lo},{la}" for la, lo in [(lat, lon)] + destinations)
+    data = _fetch_json(f"{OSRM_URL}/{coords}?sources=0&annotations=duration,distance", 8)
+    if data.get("code") != "Ok":
+        raise ProviderError(f"OSRM returned {data.get('code', 'no result')}")
+    durations = (data.get("durations") or [[None]])[0][1:]
+    distances = (data.get("distances") or [[None]])[0][1:]
+    return durations, distances
+
+
+def _compute_access(prop: Property) -> dict[str, Any]:
+    """One Overpass query + one OSRM table call → all access facts for the property."""
+    lat, lon = prop.latitude, prop.longitude
+    elements = _overpass_around(lat, lon)
+    nearest: dict[str, dict[str, Any]] = {}
+    for key, (_selectors, radius_m, label, matches) in _POI_SPECS.items():
+        best, best_dist = None, None
+        radius_mi = radius_m / 1609.344
+        for element in elements:
+            if not matches(element["tags"]):
+                continue
+            dist = _haversine_miles(lat, lon, element["lat"], element["lon"])
+            if dist <= radius_mi and (best_dist is None or dist < best_dist):
+                best, best_dist = element, dist
+        if best is not None:
+            nearest[key] = {"name": best["tags"].get("name") or label.title(), "category": label,
+                            "latitude": best["lat"], "longitude": best["lon"], "straight_line_miles": round(best_dist, 1)}
+
+    result: dict[str, Any] = {}
+    dest_keys = list(nearest.keys())
+    destinations = [(nearest[k]["latitude"], nearest[k]["longitude"]) for k in dest_keys] + [NYC_LATLON]
+    try:
+        durations, distances = _osrm_table(lat, lon, destinations)
+        for index, key in enumerate(dest_keys):
+            value = dict(nearest[key])
+            value["drive_time_minutes"] = round(durations[index] / 60) if durations[index] is not None else None
+            if distances[index] is not None:
+                value["road_miles"] = round(distances[index] / 1609.344, 1)
+            result[key] = value
+        nyc_minutes = round(durations[-1] / 60) if durations[-1] is not None else None
+        result["nyc_drive_time"] = {"destination": "Midtown Manhattan", "drive_time_minutes": nyc_minutes,
+                                    "straight_line_miles": round(_haversine_miles(lat, lon, *NYC_LATLON), 1),
+                                    "road_miles": round(distances[-1] / 1609.344, 1) if distances[-1] is not None else None}
+    except ProviderError:
+        # Routing degraded: keep the located POIs with straight-line distance only.
+        for key in dest_keys:
+            value = dict(nearest[key]); value["drive_time_minutes"] = None; value["drive_time_reason"] = "Public router (OSRM) unavailable"
+            result[key] = value
+        result["nyc_drive_time"] = {"destination": "Midtown Manhattan", "drive_time_minutes": None,
+                                    "straight_line_miles": round(_haversine_miles(lat, lon, *NYC_LATLON), 1),
+                                    "drive_time_reason": "Public router (OSRM) unavailable"}
+
+    airport = result.get("nearest_airport")
+    if airport:
+        result["airport_drive_time"] = {"name": airport["name"], "drive_time_minutes": airport.get("drive_time_minutes"),
+                                        "road_miles": airport.get("road_miles"), "straight_line_miles": airport.get("straight_line_miles")}
+    return result
+
+
+class OsmAccessProvider:
+    """Keyless per-field access provider backed by the shared OSM/OSRM computation."""
+    required_setting = None
+
+    def __init__(self, key: str, label: str):
+        self.key, self.label, self.source = key, label, OSM_SOURCE
 
     def fetch(self, prop: Property) -> dict[str, Any]:
-        settings = get_settings()
-        if not settings.live_providers_enabled:
+        if not get_settings().live_providers_enabled:
             return unavailable("Live public providers are disabled", self.source)
-        if not settings.routing_api_key:
-            return unavailable("Provider credentials are not configured", self.source)
         if prop.latitude is None or prop.longitude is None:
-            return unavailable("Latitude and longitude are required for routing", self.source)
-        route = _google_route(f"{prop.latitude},{prop.longitude}", NYC_ORIGIN, settings.routing_api_key)
-        return live({"destination": "Midtown Manhattan", **route}, self.source, 0.9)
+            return unavailable("Coordinates are required; geocode the address first", self.source)
+        access = getattr(prop, "_access_facts", None)
+        if access is None:
+            try:
+                access = _compute_access(prop)
+            except ProviderError as exc:
+                access = {"_error": str(exc)}
+            prop._access_facts = access  # type: ignore[attr-defined]
+        if access.get("_error"):
+            return unavailable(f"OpenStreetMap/OSRM lookup failed: {access['_error']}", self.source)
+        value = access.get(self.key)
+        if not value:
+            return unavailable(f"No {self.label} found nearby in OpenStreetMap", self.source)
+        return live(value, self.source, 0.75)
 
 
-def _google_route(origin: str, destination: str, key: str) -> dict[str, Any]:
-    data = HTTP.get(GoogleRoutingProvider.url, {"origin": origin, "destination": destination, "mode": "driving", "key": key})
-    if data.get("status") != "OK" or not data.get("routes"):
-        raise ProviderError(f"Directions provider returned {data.get('status', 'no route')}")
-    leg = data["routes"][0].get("legs", [{}])[0]
-    distance, duration = leg.get("distance", {}), leg.get("duration", {})
-    if not isinstance(distance.get("value"), (int, float)) or not isinstance(duration.get("value"), (int, float)):
-        raise ProviderError("Directions response did not include distance and duration")
-    return {"distance_miles": round(distance["value"] / 1609.344, 1), "drive_time_minutes": round(duration["value"] / 60), "distance_text": distance.get("text"), "drive_time_text": duration.get("text")}
-
-
-class GooglePlacesProvider:
-    """Google Places adapter for passenger rail and practical nearby services."""
-    source, required_setting = "Google Places API", "places_api_key"
-    url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-
-    def __init__(self, key: str, place_type: str, label: str, keyword: str | None = None):
-        self.key, self.place_type, self.label, self.keyword = key, place_type, label, keyword
-
-    def fetch(self, prop: Property) -> dict[str, Any]:
-        settings = get_settings()
-        if not settings.live_providers_enabled:
-            return unavailable("Live public providers are disabled", self.source)
-        if not settings.places_api_key:
-            return unavailable("Provider credentials are not configured", self.source)
-        if prop.latitude is None or prop.longitude is None:
-            return unavailable("Latitude and longitude are required for places lookup", self.source)
-        params: dict[str, Any] = {"location": f"{prop.latitude},{prop.longitude}", "rankby": "distance", "type": self.place_type, "key": settings.places_api_key}
-        if self.keyword:
-            params["keyword"] = self.keyword
-        data = HTTP.get(self.url, params)
-        if data.get("status") not in {"OK", "ZERO_RESULTS"}:
-            raise ProviderError(f"Places provider returned {data.get('status', 'no results')}")
-        results = data.get("results") or []
-        if not results:
-            return unavailable(f"No {self.label} was returned by the places provider", self.source)
-        place = results[0]
-        location = place.get("geometry", {}).get("location", {})
-        if not isinstance(location.get("lat"), (int, float)) or not isinstance(location.get("lng"), (int, float)):
-            return unavailable("Places response did not include a location", self.source)
-        value: dict[str, Any] = {"name": place.get("name"), "address": place.get("vicinity"), "place_id": place.get("place_id"), "category": self.label, "latitude": location["lat"], "longitude": location["lng"]}
-        if settings.routing_api_key:
-            value.update(_google_route(f"{prop.latitude},{prop.longitude}", f"{location['lat']},{location['lng']}", settings.routing_api_key))
-        else:
-            value["drive_time_minutes"] = None
-            value["drive_time_reason"] = "Routing provider credentials are not configured"
-        return live(value, self.source, 0.85)
-
-PROVIDERS: list[Provider] = [CensusGeocoder(), FemaFloodProvider(), ElevationProvider(), CensusDemographicsProvider(), ConfiguredProvider("county_assessor", "County assessor feed", "assessor_api_key"), ConfiguredProvider("parcel_data", "Parcel data provider", "parcel_api_key"), ConfiguredProvider("parcel_information", "County parcel provider", "parcel_api_key"), ConfiguredProvider("school_ratings", "School ratings provider", "schools_api_key"), ConfiguredProvider("zoning", "County zoning provider", "zoning_api_key"), ConfiguredProvider("str_regulations", "STR regulations provider", "str_regulations_api_key"), GoogleRoutingProvider(), GooglePlacesProvider("nearest_amtrak", "train_station", "passenger train station", "Amtrak"), GooglePlacesProvider("restaurant_hub", "restaurant", "restaurant hub", "restaurants"), GooglePlacesProvider("nearest_airport", "airport", "commercial airport"), GooglePlacesProvider("hospital_distance", "hospital", "hospital"), GooglePlacesProvider("grocery_distance", "supermarket", "grocery store"), ConfiguredProvider("airport_drive_time", "Google Maps Directions API", "routing_api_key"), ConfiguredProvider("walkability", "Walkability provider", "walkscore_api_key"), SuitabilityProvider("wedding_suitability", _wedding), SuitabilityProvider("airbnb_suitability", _airbnb), ConfiguredProvider("airbnb_intelligence", "STR market-data provider", "airdna_api_key"), ConfiguredProvider("wedding_venue", "Property and local-permit diligence", None)]
+PROVIDERS: list[Provider] = [
+    CensusGeocoder(), FemaFloodProvider(), ElevationProvider(), CensusDemographicsProvider(),
+    # Keyless, automatic once coordinates exist:
+    OsmAccessProvider("nyc_drive_time", "NYC route"),
+    OsmAccessProvider("nearest_amtrak", "train station"),
+    OsmAccessProvider("nearest_airport", "airport"),
+    OsmAccessProvider("airport_drive_time", "airport route"),
+    OsmAccessProvider("restaurant_hub", "restaurant"),
+    OsmAccessProvider("grocery_distance", "grocery store"),
+    OsmAccessProvider("hospital_distance", "hospital"),
+    OsmAccessProvider("pharmacy_distance", "pharmacy"),
+    OsmAccessProvider("hardware_distance", "hardware store"),
+    OsmAccessProvider("ski_access", "ski area"),
+    OsmAccessProvider("water_access", "lake / beach / water access"),
+    OsmAccessProvider("nearest_school", "school"),
+    # Derived Bistate suitability (not external facts):
+    SuitabilityProvider("wedding_suitability", _wedding), SuitabilityProvider("airbnb_suitability", _airbnb),
+    # Credentialed connectors (honestly unavailable until a key is supplied):
+    ConfiguredProvider("county_assessor", "County assessor feed", "assessor_api_key"),
+    ConfiguredProvider("parcel_data", "Parcel data provider", "parcel_api_key"),
+    ConfiguredProvider("parcel_information", "County parcel provider", "parcel_api_key"),
+    ConfiguredProvider("school_ratings", "School ratings provider", "schools_api_key"),
+    ConfiguredProvider("zoning", "County zoning provider", "zoning_api_key"),
+    ConfiguredProvider("str_regulations", "STR regulations provider", "str_regulations_api_key"),
+    ConfiguredProvider("walkability", "Walkability provider", "walkscore_api_key"),
+    ConfiguredProvider("airbnb_intelligence", "STR market-data provider", "airdna_api_key"),
+    ConfiguredProvider("wedding_venue", "Property and local-permit diligence", None),
+]
 
 
 def is_stale(item: dict[str, Any], reference: datetime | None = None) -> bool:

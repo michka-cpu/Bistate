@@ -93,6 +93,24 @@ test.describe('Core property journey', () => {
     await expect(page.getByText('Unavailable').first()).toBeVisible()
   })
 
+  test('Property Intelligence surfaces verified location facts automatically (not 0%)', async ({ page }) => {
+    await page.goto('/')
+    // A real, geocodable address. On re-runs this opens the existing (already geocoded)
+    // property; either way the record carries verified coordinates + county + elevation.
+    await page.getByLabel(UNIVERSAL).fill('354 Warren Street, Hudson, NY 12534')
+    await page.getByRole('button', { name: ANALYZE }).click()
+    // Live enrichment (geocode + amenities) can take a while on the first import.
+    await expect(page.locator('.property-hero h1')).toBeVisible({ timeout: 60000 })
+    await page.getByRole('button', { name: 'Property Intelligence', exact: true }).click()
+    await expect(page.getByRole('heading', { name: /Data Completeness/ })).toBeVisible()
+    // Verified identity facts are now counted — completeness is no longer 0%.
+    await expect(page.getByText('Data Completeness · 0%')).toHaveCount(0)
+    await expect(page.getByText(/auto-retrieved/)).toBeVisible()
+    await expect(page.getByText('Location & identity')).toBeVisible()
+    await expect(page.getByText('Verified address').first()).toBeVisible()
+    await expect(page.getByText('Coordinates', { exact: true })).toBeVisible()
+  })
+
   test('a blank universal search is rejected before importing', async ({ page }) => {
     await page.goto('/')
     await page.getByRole('button', { name: ANALYZE }).click()

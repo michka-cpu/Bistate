@@ -32,21 +32,36 @@ def test_red_flags_and_opportunities_use_only_supported_facts():
     assert {item["title"] for item in result["opportunities"]} >= {"Strong NYC access", "Nearby train service", "Land-based diligence potential"}
 
 
-def test_completeness_is_coverage_and_reports_stale_separately():
-    prop = property_with(acreage=2)
-    prop.enrichment_data = {"zoning": {"value": "Rural", "source": "County", "retrieval_status": "live", "confidence": .95, "last_updated": "2000-01-01T00:00:00+00:00", "missing_reason": None}}
-    result = build_property_intelligence(prop)
-    completeness = result["completeness"]
-    assert 0 < completeness["percentage_complete"] < 100
-    assert completeness["stale_fields"] == 1
-    assert "never affects acquisition scores" in completeness["method"]
+def test_completeness_is_automatic_coverage_and_reports_stale_separately():
+    # A geocoded property with verified identity + a few retrieved facts must NOT read 0%.
+    prop = property_with(acreage=2, latitude=42.25, longitude=-73.79, county="Columbia")
+    prop.enrichment_data = {
+        "elevation": {"value": {"elevation_feet": 85.7}, "source": "USGS", "retrieval_status": "live", "confidence": .85, "last_updated": "2026-08-13T00:00:00+00:00", "missing_reason": None},
+        "hospital_distance": {"value": {"name": "Columbia Memorial", "drive_time_minutes": 3}, "source": "OpenStreetMap", "retrieval_status": "live", "confidence": .75, "last_updated": "2026-08-13T00:00:00+00:00", "missing_reason": None},
+        "zoning": {"value": "Rural", "source": "County", "retrieval_status": "live", "confidence": .95, "last_updated": "2000-01-01T00:00:00+00:00", "missing_reason": None},
+    }
+    completeness = build_property_intelligence(prop)["completeness"]
+    assert completeness["percentage_complete"] > 0                     # verified facts now count
+    assert completeness["auto_fields_covered"] >= 4                    # address, coords, county, elevation, hospital, acreage
+    assert completeness["auto_fields_total"] > completeness["auto_fields_covered"]
+    assert completeness["manual_diligence_remaining"] > 0
+    assert completeness["stale_fields"] == 1                           # the 2000-dated zoning
+    assert "never affect acquisition scores" in completeness["method"]
+
+
+def test_verified_identity_facts_are_surfaced():
+    prop = property_with(latitude=42.25, longitude=-73.79, county="Columbia", postal_code="12534")
+    fields = {f["key"]: f for s in build_property_intelligence(prop)["sections"] for f in s["fields"]}
+    assert fields["resolved_address"]["value"] and fields["resolved_address"]["kind"] == "auto"
+    assert fields["coordinates"]["value"]["latitude"] == 42.25
+    assert fields["county"]["value"] == "Columbia"
 
 
 def test_intelligence_endpoint_and_refresh_contract(client):
     created = client.post("/api/properties", json={"name": "Test", "address": "1 Main", "city": "Hudson", "state": "NY"}).json()
     response = client.get(f"/api/properties/{created['id']}/intelligence")
     assert response.status_code == 200
-    assert [section["name"] for section in response.json()["sections"]] == ["Access", "Land and environment", "Infrastructure", "Regulatory", "Financial and civic"]
+    assert [section["name"] for section in response.json()["sections"]] == ["Location & identity", "Access & amenities", "Environment", "Property & parcel", "Regulatory", "Demographics & schools", "Utilities & infrastructure"]
     assert client.post(f"/api/properties/{created['id']}/enrich").status_code == 200
 
 
