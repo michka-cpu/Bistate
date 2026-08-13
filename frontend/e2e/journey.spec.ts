@@ -36,13 +36,19 @@ test.describe('Core property journey', () => {
     await expect(page.getByText('did not contain a full street address')).toHaveCount(0)
   })
 
-  test('an address-only import is clearly labeled as an estimate', async ({ page }) => {
+  test('an address-only import is gated as analysis-incomplete and the memo leaks no defaults', async ({ page }) => {
     await page.goto('/')
     const address = `${uniq()} Estimate Way, Hudson, NY 12534`
     await page.getByLabel(UNIVERSAL).fill(address)
     await page.getByRole('button', { name: ANALYZE }).click()
     await expect(page.locator('.property-hero h1')).toContainText(address.split(',')[0])
-    await expect(page.getByText('Financial figures are estimates.')).toBeVisible()
+    // The banner states results are withheld — not that default figures are usable.
+    await expect(page.getByText('Analysis incomplete.')).toBeVisible()
+    // The Investment memo must not leak default-workbook conclusions.
+    await expect(page.getByText('Required to complete the analysis')).toBeVisible()
+    await expect(page.getByText(/overall Bistate score of/)).toHaveCount(0)
+    await expect(page.getByText(/Debt service coverage is at or above/)).toHaveCount(0)
+    await expect(page.getByText('$418,000')).toHaveCount(0)
   })
 
   test('a Zillow URL carrying only a zpid is incomplete and can be resolved', async ({ page }) => {

@@ -1,6 +1,11 @@
 from typing import Any
 
 from app.models.property import Property
+from app.schemas.property import (
+    property_analysis_incomplete,
+    property_listing_incomplete,
+    property_missing_core_inputs,
+)
 from app.schemas.underwriting import UnderwritingInputs
 from app.services.underwriting import calculate
 
@@ -31,6 +36,25 @@ def underwrite_property(prop: Property) -> dict[str, Any]:
     return {"output": result, "assumptions": result["assumptions"], "scores": scores}
 
 
+def _verified_facts(prop: Property) -> list[str]:
+    """Real, legitimately-known facts to preserve even when the analysis is incomplete."""
+    facts: list[str] = []
+    if not property_listing_incomplete(prop):
+        facts.append("Address: " + ", ".join(filter(None, [prop.address, prop.city, prop.state, prop.postal_code])))
+    if prop.county:
+        facts.append(f"County: {prop.county}")
+    if prop.latitude is not None and prop.longitude is not None:
+        facts.append(f"Coordinates: {prop.latitude:.5f}, {prop.longitude:.5f}")
+    elevation = ((prop.enrichment_data or {}).get("elevation") or {}).get("value") or {}
+    if isinstance(elevation, dict) and elevation.get("elevation_feet") is not None:
+        facts.append(f"Elevation: {elevation['elevation_feet']} ft")
+    for key in ("asking_price", "annual_taxes", "acreage", "bedrooms", "bathrooms", "square_feet"):
+        value = getattr(prop, key, None)
+        if value is not None:
+            facts.append(f"{key.replace('_', ' ').title()}: {value}")
+    return facts
+
+
 def build_investment_memo(prop: Property) -> dict[str, Any]:
     output = prop.underwriting_output or {}
     dashboard = output.get("dashboard", {})
@@ -39,6 +63,46 @@ def build_investment_memo(prop: Property) -> dict[str, Any]:
     for key in ("asking_price", "annual_taxes", "latitude", "longitude", "acreage", "bedrooms", "bathrooms", "square_feet"):
         if getattr(prop, key) is None:
             missing.append(key)
+    comparables = [
+        {"address": item.address, "distance": item.distance_miles, "sale_date": item.sale_date,
+         "sale_price": float(item.sale_price) if item.sale_price else None, "square_feet": item.square_feet,
+         "price_per_square_foot": float(item.price_per_square_foot) if item.price_per_square_foot else None,
+         "source": item.source, "confidence": item.confidence, "verification_status": item.verification_status}
+        for item in prop.comparable_properties
+    ]
+
+    # Gate every default-workbook-derived conclusion when the analysis is incomplete, using
+    # the same condition the UI uses. Verified facts and missing-input lists are preserved.
+    if property_analysis_incomplete(prop):
+        required = property_missing_core_inputs(prop)
+        required_labels = [key.replace("_", " ") for key in required]
+        if property_listing_incomplete(prop):
+            required_labels = ["a resolved street address"] + required_labels
+        return {
+            "property_id": prop.id,
+            "analysis_incomplete": True,
+            "required_inputs": required_labels,
+            "executive_summary": (
+                "Investment analysis is incomplete. Property-specific scoring, returns, and conclusions cannot be "
+                "produced until the required inputs are provided, so the workbook's default scenario is withheld to "
+                "avoid presenting it as this property's results. Required inputs: " + ", ".join(required_labels) + "."
+            ),
+            "strengths": [],
+            "weaknesses": [],
+            "risks": ["Provider-backed facts require verification before acquisition.", "Critical underwriting inputs are missing."],
+            "verified_facts": _verified_facts(prop),
+            "renovation_summary": {},
+            "financial_summary": {},
+            "cash_required": 0.0,
+            "projected_returns": {},
+            "sensitivity_summary": {},
+            "underwriting_explanation": {},
+            "assumptions_used": {},
+            "comparable_properties": comparables,
+            "missing_information": sorted(set(missing)),
+            "confidence_score": prop.confidence_score or 0,
+        }
+
     strengths = []
     weaknesses = []
     if (prop.overall_score or 0) >= 70:
@@ -53,10 +117,13 @@ def build_investment_memo(prop: Property) -> dict[str, Any]:
         weaknesses.append("Base-case workbook cash-on-cash return is negative.")
     return {
         "property_id": prop.id,
+        "analysis_incomplete": False,
+        "required_inputs": [],
         "executive_summary": f"{prop.name} has an overall Bistate score of {prop.overall_score or 0:.1f}/100. Financial figures are persisted from the workbook underwriting engine.",
         "strengths": strengths,
         "weaknesses": weaknesses,
         "risks": ["Provider-backed facts require verification before acquisition."] + (["Material information is missing."] if missing else []),
+        "verified_facts": _verified_facts(prop),
         "renovation_summary": output.get("renovation", {}),
         "financial_summary": dashboard,
         "cash_required": dashboard.get("total_cash_required", 0),
@@ -64,13 +131,7 @@ def build_investment_memo(prop: Property) -> dict[str, Any]:
         "sensitivity_summary": output.get("sensitivity", {}),
         "underwriting_explanation": output.get("traceability", {}),
         "assumptions_used": prop.underwriting_assumptions or {},
-        "comparable_properties": [
-            {"address": item.address, "distance": item.distance_miles, "sale_date": item.sale_date,
-             "sale_price": float(item.sale_price) if item.sale_price else None, "square_feet": item.square_feet,
-             "price_per_square_foot": float(item.price_per_square_foot) if item.price_per_square_foot else None,
-             "source": item.source, "confidence": item.confidence, "verification_status": item.verification_status}
-            for item in prop.comparable_properties
-        ],
+        "comparable_properties": comparables,
         "missing_information": sorted(set(missing)),
         "confidence_score": prop.confidence_score or 0,
     }

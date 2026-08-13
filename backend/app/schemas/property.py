@@ -9,8 +9,44 @@ from app.schemas.acquisition import PipelineStatus
 
 # Core inputs the calibrated underwriting engine needs to produce non-placeholder
 # figures. When they are missing the model falls back to workbook defaults, so the
-# financial dashboard must be labeled as an estimate rather than presented as fact.
+# financial dashboard, scores, memo, and exports must be gated rather than presented
+# as property-specific results.
 CORE_INPUTS = ("asking_price", "annual_taxes", "acreage", "bedrooms", "bathrooms", "square_feet")
+
+
+# ---- Canonical "analysis incomplete" gate ----
+# These operate on any property-like object (ORM Property or PropertyRead) so the API,
+# the memo builder, and the exports all gate on the identical condition the UI uses.
+
+def property_missing_core_inputs(prop: Any) -> list[str]:
+    return [field for field in CORE_INPUTS if getattr(prop, field, None) is None]
+
+
+def property_listing_incomplete(prop: Any) -> bool:
+    """True when the record lacks a resolved street identity (placeholder locality or a
+    provider-id-only name)."""
+    placeholder_city = (getattr(prop, "city", None) or "") in {"", "Unknown"}
+    placeholder_state = (getattr(prop, "state", None) or "").upper() in {"", "NA"}
+    name = getattr(prop, "name", "") or ""
+    address = getattr(prop, "address", "") or ""
+    looks_like_reference = bool(
+        re.search(r"\d+\s*zpid", name, flags=re.IGNORECASE)
+        or re.search(r"\blisting\s+\d", name, flags=re.IGNORECASE)
+        or re.fullmatch(r"\d+\s*zpid", address, flags=re.IGNORECASE)
+    )
+    return placeholder_state or placeholder_city or looks_like_reference
+
+
+def property_financials_are_estimates(prop: Any) -> bool:
+    """True when workbook output exists but the purchase price was not supplied, so the
+    figures come from the default scenario."""
+    return bool(getattr(prop, "underwriting_output", None)) and getattr(prop, "asking_price", None) is None
+
+
+def property_analysis_incomplete(prop: Any) -> bool:
+    """The single gate reused by the UI, memo, and exports: identity unresolved OR the
+    critical inputs for property-specific underwriting are absent."""
+    return property_listing_incomplete(prop) or property_financials_are_estimates(prop)
 
 
 class PropertyBase(BaseModel):
@@ -104,25 +140,20 @@ class PropertyRead(PropertyBase):
     @property
     def missing_core_inputs(self) -> list[str]:
         """Core underwriting inputs that are absent for this property."""
-        return [field for field in CORE_INPUTS if getattr(self, field, None) is None]
+        return property_missing_core_inputs(self)
 
     @computed_field
     @property
     def financials_are_estimates(self) -> bool:
-        """True when workbook output exists but the purchase price (and other core
-        inputs) were not supplied, so the figures come from workbook defaults."""
-        return bool(self.underwriting_output) and self.asking_price is None
+        return property_financials_are_estimates(self)
 
     @computed_field
     @property
     def listing_incomplete(self) -> bool:
-        """True when the record lacks a resolved street identity. Covers newly
-        imported provider-id-only URLs and legacy ``Unknown, NA`` rows alike."""
-        placeholder_city = self.city in {"", "Unknown"}
-        placeholder_state = (self.state or "").upper() in {"", "NA"}
-        looks_like_reference = bool(
-            re.search(r"\d+\s*zpid", self.name, flags=re.IGNORECASE)
-            or re.search(r"\blisting\s+\d", self.name, flags=re.IGNORECASE)
-            or re.fullmatch(r"\d+\s*zpid", self.address or "", flags=re.IGNORECASE)
-        )
-        return placeholder_state or placeholder_city or looks_like_reference
+        return property_listing_incomplete(self)
+
+    @computed_field
+    @property
+    def analysis_incomplete(self) -> bool:
+        """The canonical gate the UI uses to withhold default-workbook results."""
+        return property_analysis_incomplete(self)

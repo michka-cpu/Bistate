@@ -81,6 +81,9 @@ class TaskRead(TaskCreate):
 
 class InvestmentMemo(BaseModel):
     property_id: int
+    analysis_incomplete: bool = False
+    required_inputs: list[str] = Field(default_factory=list)
+    verified_facts: list[str] = Field(default_factory=list)
     executive_summary: str
     strengths: list[str]
     weaknesses: list[str]

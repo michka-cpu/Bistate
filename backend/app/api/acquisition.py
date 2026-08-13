@@ -7,7 +7,7 @@ from app.database import get_db
 from app.models.property import Property
 from app.models.acquisition import PropertyActivityEvent
 from app.schemas.acquisition import InvestmentMemo, PropertyImport
-from app.schemas.property import PropertyRead
+from app.schemas.property import PropertyRead, property_listing_incomplete
 from app.schemas.underwriting import UnderwritingResult
 from app.services.acquisition import build_investment_memo, underwrite_property
 from app.services.enrichment import enrich_property, provider_health
@@ -164,11 +164,7 @@ def _locality_unresolved(prop: Property) -> bool:
     """True when the record still lacks a real city/state after enrichment — the same
     signal the API exposes as ``listing_incomplete``. A geocoded street address with a
     resolved locality is considered complete regardless of the initial parse."""
-    import re as _re
-    placeholder_city = (prop.city or "").strip() in ("", "Unknown")
-    placeholder_state = (prop.state or "").strip().upper() in ("", "NA")
-    looks_like_reference = bool(_re.search(r"\d+\s*zpid|\blisting\s+\d", prop.name or "", flags=_re.IGNORECASE))
-    return placeholder_city or placeholder_state or looks_like_reference
+    return property_listing_incomplete(prop)
 
 
 def _normalize_address(value: str | None) -> str:

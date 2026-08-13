@@ -1,5 +1,23 @@
 # Release Notes
 
+## Acceptance fix — Investment memo (and exports) leaked default-workbook conclusions while analysis-incomplete
+
+The hero/Overview gating was working, but the **Investment memo** still leaked default-scenario conclusions: an overall Bistate score (~70.5/100) plus strengths like "acquisition score above benchmark", "DSCR ≥ 1.25x", and "positive cash-on-cash". Those contradict the analysis-incomplete state. Audit found the same leak in **CSV/XLSX exports**, the **portfolio summary averages**, the **side-by-side comparison**, and the **suitability score rings**, and a banner ("Financial figures are estimates") that implied the default figures were usable.
+
+**Fix (presentation/output gating only — workbook, weights, thresholds, provider/enrichment logic untouched):**
+- **One canonical gate** (`property_analysis_incomplete` in `schemas/property.py`) now drives the UI, the memo, and the exports identically: identity unresolved **or** critical inputs (asking price, taxes, acreage, beds/baths, sq ft) absent. `PropertyRead` also exposes `analysis_incomplete`.
+- **Memo** (`services/acquisition.py::build_investment_memo`): when incomplete it emits **no** overall/Bistate score, DSCR/CoC/financial-strength conclusion, or hard-constraint result; `strengths`/`weaknesses` are empty; `financial_summary`/`projected_returns`/`assumptions_used` are `{}` and `cash_required` is `0`. It instead states the analysis is incomplete, lists `required_inputs`, and preserves real `verified_facts` (address, county, coordinates, elevation, any known core fields). New schema fields: `analysis_incomplete`, `required_inputs`, `verified_facts`.
+- **Exports:** CSV blanks `overall_score`/`irr` and adds an `analysis_state` column; XLSX withholds "Overall score", drops the "Workbook Output" sheet, and adds an "Analysis Incomplete" sheet listing required inputs; the PDF is built from the gated memo. Complete properties still export full results.
+- **Other surfaces:** the Overview memo panel shows required inputs + verified facts (not strengths); the portfolio summary excludes incomplete records from Average Buy Score / Average IRR / highest-scoring; the side-by-side comparison shows "Incomplete" for a column's workbook-derived rows; the suitability tabs show "n/a — not scored" instead of a fallback ring when the facts they depend on are missing. The banner now reads **"Analysis incomplete … results are withheld"** rather than "estimates".
+
+**Manual retest** (`609 Green Lake Road, Catskill, NY 12414`): opens cleanly, geocoded to **Catskill, Greene County, ZIP 12414**, coords 42.29091/−73.87865, **elevation 255 ft**; confidence ≈ 5. Memo (verified in-browser) shows **no** score/DSCR/CoC leak — only "Investment analysis is incomplete", the six required inputs, and the four verified facts. CSV `overall_score`/`irr` empty; XLSX has no "Workbook Output" sheet.
+
+**Tests:** `test_analysis_gating.py` (7) proves an incomplete property exposes no default scores/returns/conclusions via memo, CSV, XLSX, or PDF, while a property with the required inputs still receives normal analysis; frontend adds memo-panel + KPI gating tests; e2e asserts the memo leaks no defaults. Suites: **backend 65, frontend build/lint/16, Playwright 16** — all green.
+
+**Remaining places default/synthetic data could reach the user:** none found for the analysis-incomplete state after this pass. When analysis **is** complete (asking price provided), workbook results are shown normally (by design). Non-financial synthetic values still shown with their own caveats: enrichment provider fallbacks are labeled unavailable; FEMA/demographics disclose why they're missing.
+
+---
+
 ## Acceptance fix — valid address reported "Import failed" / "incomplete"; financial-failure gating
 
 A full US address (`139 County Route 21c, Ghent, NY 12075`) entered in the pipeline **Import & analyze** box returned **"Import failed"** and then an incomplete-listing banner. Root causes (both general, reproduced in-browser):

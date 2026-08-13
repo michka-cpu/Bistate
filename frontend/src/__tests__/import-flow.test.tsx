@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import DashboardPage from '../pages/DashboardPage'
 import { buildImportBody } from '../lib/importInput'
 import { KpiGrid } from '../components/KPICards'
+import { TabContent } from '../components/PropertyDetailPage'
 
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
@@ -58,6 +59,20 @@ describe('analysis-incomplete gating', () => {
     expect(screen.getByText(/analysis incomplete/i)).toBeInTheDocument()
     expect(screen.queryByText('$418,000')).not.toBeInTheDocument()
     expect(screen.getByText(/Asking price/)).toBeInTheDocument()
+  })
+  it('memo panel withholds default strengths/score and shows required inputs + verified facts', () => {
+    const memo = {
+      analysis_incomplete: true, required_inputs: ['asking price', 'acreage'], verified_facts: ['County: Columbia', 'Elevation: 741 ft'],
+      executive_summary: 'Investment analysis is incomplete. Required inputs: asking price, acreage.',
+      strengths: [], weaknesses: [], risks: ['Critical underwriting inputs are missing.'], comparable_properties: [], missing_information: [],
+    }
+    render(<TabContent tab="Overview" property={property({ financials_are_estimates: true })} properties={[]} memo={memo} notes={[]} tasks={[]} documents={[]} valuation={null} refresh={async () => {}} />)
+    expect(screen.getByText(/Investment analysis is incomplete/)).toBeInTheDocument()
+    expect(screen.getByText('Required to complete the analysis')).toBeInTheDocument()
+    expect(screen.getByText('County: Columbia')).toBeInTheDocument()
+    // No default-workbook conclusions leak through the memo.
+    expect(screen.queryByText(/acquisition score/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/1\.25x/)).not.toBeInTheDocument()
   })
   it('shows KPIs once analysis is complete', () => {
     const dashboard = { total_cash_required: 418000, cash_on_cash_return: 0.193, dscr: 3.59, renovation_contingency: 172500, noi_before_debt: 100000, purchase_price: 640000 }

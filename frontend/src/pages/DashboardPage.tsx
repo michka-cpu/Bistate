@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AcquisitionPipeline, Dashboard, KpiGrid, PipelineProgress, TabContent, StatusDot, EmptyState, EstimateBanner, IncompleteListingBanner } from '../components/PropertyDetailPage'
+import { AcquisitionPipeline, Dashboard, KpiGrid, PipelineProgress, TabContent, StatusDot, EmptyState, AnalysisIncompleteBanner, IncompleteListingBanner } from '../components/PropertyDetailPage'
 import { ExportMenu } from '../components/ExportMenu'
 import { buildImportBody } from '../lib/importInput'
 import type { FormEvent } from 'react'
@@ -29,7 +29,7 @@ type Note = { id: number; body: string; author: string | null; created_at: strin
 type Task = { id: number; title: string; assignee: string | null; due_date: string | null; completed: boolean }
 type Document = { id: number; filename: string; document_type: string; size_bytes: number }
 type Valuation = { estimated_value: number | null; value_range: { low: number; high: number } | null; confidence_score: number; pricing_signal: string; discount_premium: number | null; percent_difference: number | null; comparables: Array<Record<string, unknown>>; explanation: string }
-type Memo = { executive_summary: string; strengths: string[]; weaknesses: string[]; risks: string[]; comparable_properties: Array<Record<string, unknown>>; missing_information: string[] }
+type Memo = { executive_summary: string; strengths: string[]; weaknesses: string[]; risks: string[]; comparable_properties: Array<Record<string, unknown>>; missing_information: string[]; analysis_incomplete?: boolean; required_inputs?: string[]; verified_facts?: string[] }
 
 // Primary diligence sections first (the workflow the user follows), then supporting tabs.
 const tabs = ['Overview', 'Listing', 'Financials', 'Airbnb', 'Wedding Venue', 'Personal Use', 'Property Intelligence', 'Comparable Sales', 'Risks & Missing Data', 'Underwriting', 'Renovation', 'Maps', 'Valuation', 'Documents', 'Notes', 'Activity Timeline'] as const
@@ -160,7 +160,7 @@ export default function DashboardPage({ focusPropertyId = null, onOpenDiscovery 
         {liveProvidersOff && <div className="disclosure-banner" role="status">Live enrichment providers are not configured in this environment. Location, flood, demographic, and market facts were not retrieved — coverage below reflects that, and figures are not backed by external data.</div>}
         {selected ? <>
           {selected.listing_incomplete && <IncompleteListingBanner property={selected} busy={busy} onResolve={(address) => void resolveListing(selected.id, address)} />}
-          {selected.financials_are_estimates && <EstimateBanner property={selected} />}
+          {selected.financials_are_estimates && !selected.listing_incomplete && <AnalysisIncompleteBanner property={selected} />}
           <section className="property-hero">
             <div><div className="eyebrow">{selected.listing_source ?? 'Manual import'} {selected.mls_number ? `· ${selected.mls_number}` : ''}</div><h1>{selected.name}</h1><p>{selected.listing_incomplete ? 'Address unresolved — see the banner above to complete this listing.' : `${selected.address}, ${selected.city}, ${selected.state} ${selected.postal_code ?? ''}`}</p></div>
             <div className="hero-actions"><select aria-label="Pipeline status" value={selected.status} onChange={(event) => void updateStatus(event.target.value)}>{statuses.map((status) => <option key={status}>{status}</option>)}</select>{selected.listing_url && <a href={selected.listing_url} target="_blank" rel="noreferrer">View listing ↗</a>}<ExportMenu propertyId={selected.id} hasUnderwriting={Boolean(selected.underwriting_output)} /></div>
