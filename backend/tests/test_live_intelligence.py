@@ -31,31 +31,70 @@ def test_unconfigured_enrichment_has_provenance_and_explicit_missing_reason() ->
     assert data["fema_flood"]["source"] == "FEMA National Flood Hazard Layer"
 
 
-def test_google_routing_and_places_are_persisted_with_provenance(monkeypatch) -> None:
+def test_keyless_osm_access_facts_are_computed_from_coordinates() -> None:
+    # One Overpass response + one OSRM table → nearest POI per category with drive times.
     from app.services import enrichment
+    prop = Property(name="Ghent", address="139 County Route 21C", city="Ghent", state="NY", latitude=42.20, longitude=-73.60)
+    overpass_elements = [
+        {"lat": 42.21, "lon": -73.61, "tags": {"railway": "station", "name": "Hudson"}},
+        {"lat": 42.30, "lon": -73.80, "tags": {"aeroway": "aerodrome", "name": "Athens Airport"}},
+        {"lat": 42.201, "lon": -73.601, "tags": {"amenity": "hospital", "name": "Columbia Memorial"}},
+        {"lat": 42.60, "lon": -73.40, "tags": {"landuse": "winter_sports", "name": "Catamount"}},
+    ]
 
-    settings = enrichment.get_settings()
-    monkeypatch.setattr(settings, "live_providers_enabled", True)
-    monkeypatch.setattr(settings, "routing_api_key", "routing-key")
-    monkeypatch.setattr(settings, "places_api_key", "places-key")
+    def fake_table(lat, lon, destinations):
+        n = len(destinations)
+        return [600.0] * n, [16093.0] * n  # 10 minutes / 10 mi to each destination + NYC
 
-    def response(url, params):
-        if "hazards.fema.gov" in url:
-            return {"features": []}  # keyless FEMA lookup: outside a special flood hazard area
-        if "directions" in url:
-            return {"status": "OK", "routes": [{"legs": [{"distance": {"value": 16093, "text": "10 mi"}, "duration": {"value": 1200, "text": "20 mins"}}]}]}
-        return {"status": "OK", "results": [{"name": "Hudson Amtrak", "vicinity": "Hudson, NY", "place_id": "place-1", "geometry": {"location": {"lat": 42.25, "lng": -73.8}}}]}
+    import app.services.enrichment as e
+    e_orig_over, e_orig_table = e._overpass_around, e._osrm_table
+    try:
+        e._overpass_around = lambda lat, lon: overpass_elements
+        e._osrm_table = fake_table
+        access = e._compute_access(prop)
+    finally:
+        e._overpass_around, e._osrm_table = e_orig_over, e_orig_table
 
-    monkeypatch.setattr(enrichment.HTTP, "get", response)
-    prop = Property(name="Ghent", address="139 County Route 21C", city="Ghent", state="NY", latitude=42.2, longitude=-73.6)
-    data, errors = enrichment.enrich_property(prop)
+    assert access["nearest_amtrak"]["name"] == "Hudson"
+    assert access["nearest_amtrak"]["drive_time_minutes"] == 10
+    assert access["nearest_airport"]["name"] == "Athens Airport"
+    assert access["airport_drive_time"]["drive_time_minutes"] == 10
+    assert access["hospital_distance"]["name"] == "Columbia Memorial"
+    assert access["ski_access"]["name"] == "Catamount"
+    assert access["nyc_drive_time"]["drive_time_minutes"] == 10 and access["nyc_drive_time"]["straight_line_miles"] > 0
 
-    assert not errors
-    assert data["nyc_drive_time"]["retrieval_status"] == "live"
-    assert data["nyc_drive_time"]["value"]["distance_miles"] == 10.0
-    for key in ("nearest_amtrak", "restaurant_hub", "nearest_airport", "hospital_distance", "grocery_distance"):
-        assert data[key]["source"] == "Google Places API"
-        assert data[key]["value"]["drive_time_minutes"] == 20
+
+def test_osm_access_provider_is_keyless_and_needs_only_coordinates(monkeypatch) -> None:
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment, "_compute_access", lambda prop: {"hospital_distance": {"name": "General", "drive_time_minutes": 4, "straight_line_miles": 2.0}})
+    prop = Property(name="x", address="1 A St", city="Hudson", state="NY", latitude=42.25, longitude=-73.79)
+    field = enrichment.OsmAccessProvider("hospital_distance", "hospital").fetch(prop)
+    assert field["retrieval_status"] == "live" and field["source"].startswith("OpenStreetMap")
+    assert field["value"]["drive_time_minutes"] == 4
+    # No coordinates -> unavailable, and never a fabricated result.
+    field2 = enrichment.OsmAccessProvider("hospital_distance", "hospital").fetch(Property(name="x", address="1 A St", city="Hudson", state="NY"))
+    assert field2["value"] is None and "Coordinates are required" in field2["missing_reason"]
+
+
+def test_fema_retries_the_error_envelope_then_succeeds(monkeypatch) -> None:
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.time, "sleep", lambda *_: None)
+    calls = {"n": 0}
+
+    def flaky(url, params):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return {"error": {"code": 400}}          # rate-limited twice
+        return {"features": []}                        # then succeeds: outside SFHA
+
+    monkeypatch.setattr(enrichment.HTTP, "get", flaky)
+    prop = Property(name="x", address="1 A St", city="Hudson", state="NY", latitude=42.25, longitude=-73.79)
+    field = enrichment.FemaFloodProvider().fetch(prop)
+    assert calls["n"] == 3
+    assert field["retrieval_status"] == "live"
+    assert field["value"]["flood_risk"] == "outside_mapped_special_flood_hazard_area"
 
 
 def test_provider_http_responses_are_cached(monkeypatch) -> None:
@@ -180,6 +219,8 @@ def test_fema_error_envelope_is_disclosed_not_faked(monkeypatch) -> None:
     from app.services import enrichment
     prop = Property(name="X", address="1 A St", city="Hudson", state="NY", latitude=42.26, longitude=-73.6)
     monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(enrichment, "_compute_access", lambda prop: {})  # keep OSM/OSRM hermetic
     monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"error": {"code": 400, "message": "Failed to execute query."}})
     data, errors = enrichment.enrich_property(prop)
     assert data["fema_flood"]["value"] is None
