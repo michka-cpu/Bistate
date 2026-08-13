@@ -26,6 +26,15 @@ class Settings(BaseSettings):
     places_api_key: str | None = None
     walkscore_api_key: str | None = None
     airdna_api_key: str | None = None
+    # Listing ingestion: a polite browser-like UA for reading a listing page's own
+    # published structured metadata (schema.org JSON-LD / OpenGraph). An optional
+    # licensed listing-data API key is preferred when configured; absent it, providers
+    # that block automated access fail honestly rather than inventing facts.
+    listing_fetch_user_agent: str = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    )
+    listing_data_api_key: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

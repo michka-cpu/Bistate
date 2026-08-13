@@ -23,6 +23,8 @@ type Property = {
   overall_score: number | null; buy_score: number | null; airbnb_score: number | null; wedding_score: number | null
   personal_use_score: number | null; confidence_score: number | null; is_favorite: boolean; is_pinned: boolean; pipeline_state: Record<string, string>; provider_errors: Record<string, unknown>; created_at: string; updated_at: string
   financials_are_estimates?: boolean; missing_core_inputs?: string[]; listing_incomplete?: boolean
+  listing_data?: Record<string, { value: unknown; source: string | null; retrieval_status: string; missing_reason: string | null; url?: string | null }>
+  listing_ingestion?: { provider: string | null; status: string; facts_retrieved: boolean; fields_retrieved: string[]; reason: string | null; canonical_url: string | null }
 }
 type ProviderHealth = { provider: string; source: string; configured: boolean; enabled: boolean }
 type Note = { id: number; body: string; author: string | null; created_at: string }

@@ -10,7 +10,7 @@ export function TabContent({ tab, property, properties, memo, notes, tasks, docu
   const output = property.underwriting_output
   const incomplete = analysisIncomplete(property)
   if (tab === 'Overview') return <Overview property={property} memo={memo} tasks={tasks} refresh={refresh} onResolve={onResolve} liveProvidersOff={liveProvidersOff} />
-  if (tab === 'Listing') return <ListingSection property={property} onResolve={onResolve} />
+  if (tab === 'Listing') return <ListingSection property={property} onResolve={onResolve} onRefresh={onRefresh} />
   if (tab === 'Property Intelligence') return <PropertyIntelligence propertyId={property.id} onRefreshed={refresh} />
   if (tab === 'Activity Timeline') return <ActivityTimeline property={property} notes={notes} documents={documents} />
   if (tab === 'Financials') return incomplete ? <AnalysisIncomplete property={property} heading="Financials — analysis incomplete" context="workbook financial output" /> : <DataSection title="Workbook financial summary" data={output?.dashboard ?? {}} />
@@ -183,14 +183,49 @@ export function IncompleteListingBanner({ property, busy, onResolve }: { propert
 }
 
 
-function ListingSection({ property, onResolve }: { property: Property; onResolve?: (address?: string) => void }) {
-  const data = { name: property.name, address: property.address, city: property.city, state: property.state, postal_code: property.postal_code, county: property.county, property_type: property.property_type, asking_price: property.asking_price, annual_taxes: property.annual_taxes, listing_source: property.listing_source, mls_number: property.mls_number, listing_status: property.status, description: property.description }
-  return <div className="two-column">
-    <DataSection title="Listing details" data={data} />
-    <article className="panel"><div className="panel-title"><span>Source & provenance</span></div><dl className="facts">
-      <Fact label="Provider" value={property.listing_source ?? 'Manual entry'} />
+const LISTING_FACT_ROWS: Array<[string, string, (value) => string]> = [
+  ['Asking price', 'asking_price', (v) => money(v)],
+  ['Bedrooms', 'bedrooms', (v) => String(v)],
+  ['Bathrooms', 'bathrooms', (v) => String(v)],
+  ['Square feet', 'square_feet', (v) => Number(v).toLocaleString()],
+  ['Acreage / lot size', 'acreage', (v) => String(v)],
+  ['Property type', 'property_type', (v) => String(v)],
+  ['Listing status', 'listing_status', (v) => String(v)],
+  ['Listing date', 'listing_date', (v) => String(v)],
+  ['Annual taxes', 'annual_taxes', (v) => money(v)],
+  ['Photos', 'photos', (v) => Array.isArray(v) ? `${v.length} photo${v.length === 1 ? '' : 's'}` : String(v)],
+]
+
+// Distinguishes listing facts (from the source) from geocoding/enrichment. When a
+// provider is recognized but facts can't be retrieved, it says so — it never presents
+// geocoding as if the listing were successfully ingested.
+function ListingIngestionBanner({ ingestion, url, onRefresh }: { ingestion; url?: string | null; onRefresh?: () => void }) {
+  if (!url || !ingestion?.provider) return null
+  if (ingestion.facts_retrieved) {
+    return <div className="disclosure-banner ingest-ok" role="status"><strong>Listing facts ingested from {ingestion.provider}.</strong> Retrieved: {(ingestion.fields_retrieved || []).map(labelize).join(', ')}. Fields the source did not publish are shown as unavailable, never invented.</div>
+  }
+  return <div className="incomplete-banner ingest-blocked" role="alert">
+    <div><strong>{ingestion.provider} recognized, but listing facts could not be retrieved.</strong> {ingestion.reason} Only the geocoded location is available — this is not a successfully ingested listing, and price/beds/baths/etc. are shown as unavailable rather than guessed.</div>
+    {onRefresh && <form className="resolve-form" onSubmit={(event) => { event.preventDefault(); onRefresh() }}><button type="submit">↻ Retry ingestion</button></form>}
+  </div>
+}
+
+function ListingSection({ property, onResolve, onRefresh }: { property: Property; onResolve?: (address?: string) => void; onRefresh?: () => void }) {
+  const listing = property.listing_data || {}
+  const ingestion = property.listing_ingestion || {}
+  return <div className="listing-layout">
+    <ListingIngestionBanner ingestion={ingestion} url={property.listing_url} onRefresh={onRefresh} />
+    <article className="panel"><div className="panel-title"><span>Listing facts</span><span>{ingestion.provider ?? 'Manual entry'}{ingestion.facts_retrieved ? ' · ingested' : ''}</span></div>
+      <table className="listing-facts-table"><thead><tr><th>Field</th><th>Value</th><th>Source / status</th></tr></thead><tbody>
+        {LISTING_FACT_ROWS.map(([label, key, fmt]) => { const item = listing[key] || {}; const available = item.value != null
+          return <tr key={key}><td>{label}</td><td className={available ? 'fact-value' : 'muted'}>{available ? fmt(item.value) : 'Unavailable'}</td><td className="muted">{available ? (item.source ?? 'Listing') : (item.missing_reason ?? 'Not retrieved')}</td></tr> })}
+      </tbody></table>
+    </article>
+    <article className="panel"><div className="panel-title"><span>Identity &amp; source</span><span>geocoding, not listing</span></div><dl className="facts">
+      <Fact label="Resolved address" value={property.listing_incomplete ? 'Incomplete' : `${property.address}, ${property.city}, ${property.state} ${property.postal_code ?? ''}`} />
+      <Fact label="County (enrichment)" value={property.county ?? '—'} />
+      <Fact label="Provider" value={ingestion.provider ?? property.listing_source ?? 'Manual entry'} />
       <Fact label="MLS #" value={property.mls_number ?? '—'} />
-      <Fact label="Resolved address" value={property.listing_incomplete ? 'Incomplete' : 'Yes'} />
     </dl>
     {property.listing_url ? <p className="muted"><a href={property.listing_url} target="_blank" rel="noreferrer">Open source listing ↗</a></p> : <p className="muted">No source URL recorded.</p>}
     {property.listing_incomplete && onResolve && <p className="muted"><button className="link-button" onClick={() => onResolve()}>Retry resolve from link</button></p>}

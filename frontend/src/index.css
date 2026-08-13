@@ -101,6 +101,14 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .risk-list.danger { color: #f2a6ae; }.risk-list.warning { color: #e7c98a; }
 .estimate-note { margin-bottom: 16px; padding: 10px 14px; border: 1px solid #5a4a24; border-radius: 8px; color: #e7cd97; background: #201a0e; font-size: 12px; }
 
+.listing-layout { display: grid; gap: 18px; }
+.listing-facts-table { width: 100%; border-collapse: collapse; }
+.listing-facts-table th, .listing-facts-table td { padding: 11px 12px; border-bottom: 1px solid #202a36; text-align: left; font-size: 12px; vertical-align: top; }
+.listing-facts-table thead th { color: #6f7e91; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.listing-facts-table td.fact-value { color: #e4ecf5; font-weight: 600; }
+.disclosure-banner.ingest-ok { border-color: #2a4a3c; color: #a9e6c9; background: #10201a; margin: 0; }
+.incomplete-banner.ingest-blocked { margin: 0; }
+.incomplete-banner.ingest-blocked .resolve-form button { background: #f1c37a; color: #241a08; }
 .analysis-incomplete { margin: 0 38px 28px; border-color: #5a4a24; background: linear-gradient(180deg, #1f1a10, #14100a); }
 .tab-content .analysis-incomplete { margin: 0; }
 .analysis-incomplete .panel-title > span { color: #f2d69a; }

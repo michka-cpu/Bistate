@@ -13,6 +13,7 @@ from app.services.acquisition import build_investment_memo, underwrite_property
 from app.services.enrichment import enrich_property, provider_health
 from app.services.property_intelligence import build_property_intelligence
 from app.services.listing_providers import NormalizedListing, normalize_listing
+from app.services.listing_ingestion import apply_listing_facts, ingest_listing
 from app.services.comparables import collect_comparables
 from app.services.valuation import value_property
 
@@ -47,6 +48,10 @@ def import_property(payload: PropertyImport, db: Session = Depends(get_db)) -> P
     )
     db.add(prop)
     db.flush()
+    # Retrieve real listing facts from the source before enrichment/underwriting, so that
+    # when enough core facts exist the analysis-incomplete gate opens automatically.
+    if prop.listing_url:
+        _ingest_and_log(prop, db)
     _run_pipeline(prop)
     # Resolution is judged AFTER enrichment: live geocoding can backfill a locality the
     # parser could not, so a valid street address is not left flagged as incomplete.
@@ -57,6 +62,19 @@ def import_property(payload: PropertyImport, db: Session = Depends(get_db)) -> P
     db.commit()
     db.refresh(prop)
     return prop
+
+
+def _ingest_and_log(prop: Property, db: Session) -> None:
+    """Attempt listing-fact ingestion and record a truthful activity event."""
+    meta = (prop.listing_data or {}).get("_meta", {})
+    facts = ingest_listing(prop.listing_url)
+    status = apply_listing_facts(prop, facts)
+    meta = (prop.listing_data or {}).get("_meta", {})
+    if status == "ingested":
+        message = f"Listing facts ingested from {meta.get('provider')}: {', '.join(meta.get('fields_retrieved', [])) or 'facts'}"
+    else:
+        message = f"Listing facts not retrieved ({meta.get('provider') or 'unsupported'}): {meta.get('reason')}"
+    db.add(PropertyActivityEvent(property_id=prop.id, event_type="listing_ingestion", message=message))
 
 
 @router.post("/{property_id}/resolve", response_model=PropertyRead)
@@ -118,6 +136,9 @@ def get_investment_memo(property_id: int, db: Session = Depends(get_db)) -> dict
 @router.post("/{property_id}/refresh", response_model=PropertyRead)
 def refresh_analysis(property_id: int, db: Session = Depends(get_db)) -> Property:
     prop = _get_property(property_id, db)
+    # Re-attempt listing ingestion (e.g. after a transient provider block) before re-running.
+    if prop.listing_url:
+        _ingest_and_log(prop, db)
     _run_pipeline(prop, refresh=True)
     db.commit(); db.refresh(prop)
     return prop
