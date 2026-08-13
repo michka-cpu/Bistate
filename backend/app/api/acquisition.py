@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -11,11 +12,20 @@ from app.schemas.underwriting import UnderwritingResult
 from app.services.acquisition import build_investment_memo, underwrite_property
 from app.services.enrichment import enrich_property, provider_health
 from app.services.property_intelligence import build_property_intelligence
-from app.services.listing_providers import normalize_listing
+from app.services.listing_providers import NormalizedListing, normalize_listing
 from app.services.comparables import collect_comparables
 from app.services.valuation import value_property
 
 router = APIRouter(prefix="/properties", tags=["acquisition"])
+
+
+class ResolveRequest(BaseModel):
+    """Optionally supply the missing street address for an incomplete listing.
+
+    With no address we re-parse the stored listing URL (a "retry"); with an address
+    the user completes the record directly. We never invent an address."""
+
+    raw_address: str | None = Field(default=None, max_length=500)
 
 
 @router.post("/import", response_model=PropertyRead, status_code=status.HTTP_201_CREATED)
@@ -38,8 +48,34 @@ def import_property(payload: PropertyImport, db: Session = Depends(get_db)) -> P
     db.add(prop)
     db.flush()
     _run_pipeline(prop)
-    db.add(PropertyActivityEvent(property_id=prop.id, event_type="imported", message="Property imported"))
-    prop.status = "Reviewing"
+    message = "Property imported (listing information incomplete)" if listing.needs_resolution else "Property imported"
+    db.add(PropertyActivityEvent(property_id=prop.id, event_type="imported", message=message))
+    # An unresolved listing needs an address before diligence can be trusted.
+    prop.status = "Needs Info" if listing.needs_resolution else "Reviewing"
+    db.commit()
+    db.refresh(prop)
+    return prop
+
+
+@router.post("/{property_id}/resolve", response_model=PropertyRead)
+def resolve_listing(property_id: int, payload: ResolveRequest, db: Session = Depends(get_db)) -> Property:
+    """Resolve an incomplete listing: apply a supplied address, otherwise re-parse the
+    stored listing URL, then re-run analysis. Returns the (possibly still incomplete) record."""
+    prop = _get_property(property_id, db)
+    listing: NormalizedListing | None = None
+    if payload.raw_address and payload.raw_address.strip():
+        listing = normalize_listing(PropertyImport(raw_address=payload.raw_address.strip()))
+    elif prop.listing_url:
+        listing = normalize_listing(PropertyImport(listing_url=prop.listing_url))
+    if listing is not None and not listing.needs_resolution:
+        prop.name, prop.address = listing.name, listing.address
+        prop.city, prop.state = listing.city, listing.state
+        prop.postal_code = listing.postal_code or prop.postal_code
+        _run_pipeline(prop, refresh=True)
+        prop.status = "Reviewing"
+        db.add(PropertyActivityEvent(property_id=prop.id, event_type="resolved", message=f"Listing resolved to {prop.address}"))
+    else:
+        db.add(PropertyActivityEvent(property_id=prop.id, event_type="resolve_failed", message="Listing could not be resolved automatically; a full address is required"))
     db.commit()
     db.refresh(prop)
     return prop
@@ -137,6 +173,10 @@ def _find_duplicate(listing, db: Session) -> Property | None:
         by_url = db.scalar(select(Property).where(Property.listing_url == listing.listing_url))
         if by_url is not None:
             return by_url
+    # Unresolved listings share a placeholder address (Unknown/NA); matching on it would
+    # wrongly collapse distinct incomplete listings together. De-duplicate them by URL only.
+    if getattr(listing, "needs_resolution", False):
+        return None
     target = _normalize_address(listing.address)
     if not target:
         return None

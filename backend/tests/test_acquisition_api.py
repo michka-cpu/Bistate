@@ -38,10 +38,66 @@ def test_import_rejects_normalized_duplicate_address_and_url(client: TestClient)
     assert duplicate.status_code == 409
     assert "already exists" in duplicate.json()["detail"]
 
-    listing = {"listing_url": "https://www.zillow.com/homedetails/139-county-route-21c-ghent-ny/123"}
+    # A listing URL whose slug resolves to the same street address is now recognized as
+    # the same property (previously the URL slug degraded to an opaque id and slipped through).
+    same_via_url = {"listing_url": "https://www.zillow.com/homedetails/139-County-Route-21C-Ghent-NY/8675309_zpid/"}
+    assert client.post("/api/properties/import", json=same_via_url).status_code == 409
+
+    # A distinct listing URL imports once and is de-duplicated by URL on re-import.
+    listing = {"listing_url": "https://www.zillow.com/homedetails/500-Distinct-Way-Ghent-NY-12075/123_zpid/"}
     assert client.post("/api/properties/import", json=listing).status_code == 201
     duplicate_url = client.post("/api/properties/import", json=listing)
     assert duplicate_url.status_code == 409
+
+
+def test_import_marks_provider_id_only_urls_incomplete(client: TestClient) -> None:
+    """A Zillow URL carrying only a zpid must not masquerade as a resolved address."""
+    prop = client.post(
+        "/api/properties/import",
+        json={"listing_url": "https://www.zillow.com/homedetails/215394889_zpid/"},
+    ).json()
+    assert prop["listing_source"] == "Zillow"
+    assert prop["listing_incomplete"] is True
+    assert prop["status"] == "Needs Info"
+    assert "215394889" in prop["name"]
+    assert "Unknown" not in prop["name"]  # no fabricated locality in the name
+
+
+def test_distinct_incomplete_listings_are_not_deduplicated(client: TestClient) -> None:
+    """Two different zpid-only URLs share the Unknown/NA placeholder but are distinct
+    properties; they must not collapse into one via the placeholder address."""
+    first = client.post("/api/properties/import", json={"listing_url": "https://www.zillow.com/homedetails/111111_zpid/"})
+    second = client.post("/api/properties/import", json={"listing_url": "https://www.zillow.com/homedetails/222222_zpid/"})
+    assert first.status_code == 201 and second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
+    # The exact same URL is still rejected as a duplicate.
+    assert client.post("/api/properties/import", json={"listing_url": "https://www.zillow.com/homedetails/111111_zpid/"}).status_code == 409
+
+
+def test_redfin_and_realtor_urls_resolve_locality(client: TestClient) -> None:
+    redfin = client.post("/api/properties/import", json={"listing_url": "https://www.redfin.com/NY/Hudson/50-Elm-St-12534/home/98765432"}).json()
+    assert redfin["listing_incomplete"] is False
+    assert redfin["city"] == "Hudson" and redfin["state"] == "NY"
+    realtor = client.post("/api/properties/import", json={"listing_url": "https://www.realtor.com/realestateandhomes-detail/60-Oak-Ave_Kingston_NY_12401_M55555-11111"}).json()
+    assert realtor["listing_incomplete"] is False
+    assert realtor["city"] == "Kingston" and realtor["state"] == "NY"
+
+
+def test_resolve_completes_an_incomplete_listing(client: TestClient) -> None:
+    created = client.post(
+        "/api/properties/import",
+        json={"listing_url": "https://www.zillow.com/homedetails/998877_zpid/"},
+    ).json()
+    assert created["listing_incomplete"] is True
+    resolved = client.post(
+        f"/api/properties/{created['id']}/resolve",
+        json={"raw_address": "77 Orchard Lane, Hudson, NY 12534"},
+    )
+    assert resolved.status_code == 200
+    body = resolved.json()
+    assert body["listing_incomplete"] is False
+    assert body["address"] == "77 Orchard Lane"
+    assert body["status"] == "Reviewing"
 
 
 def test_import_rejects_duplicate_addresses_differing_only_by_punctuation_or_spacing(client: TestClient) -> None:
@@ -64,6 +120,20 @@ def test_import_labels_landwatch_urls_with_their_provider(client: TestClient) ->
     )
     assert prop.status_code == 201
     assert prop.json()["listing_source"] == "LandWatch"
+
+
+def test_financials_are_flagged_as_estimates_until_core_inputs_exist(client: TestClient) -> None:
+    prop = client.post("/api/properties/import", json={"raw_address": "9 Estimate Rd, Hudson, NY 12534"}).json()
+    # Without an asking price the workbook runs on defaults; the API must say so.
+    assert prop["financials_are_estimates"] is True
+    assert "asking_price" in prop["missing_core_inputs"]
+
+    client.put(f"/api/properties/{prop['id']}", json={"asking_price": 640000})
+    underwritten = client.post(f"/api/properties/{prop['id']}/underwrite")
+    assert underwritten.status_code == 200
+    refreshed = client.get(f"/api/properties/{prop['id']}").json()
+    assert refreshed["financials_are_estimates"] is False
+    assert "asking_price" not in refreshed["missing_core_inputs"]
 
 
 def test_refresh_enrichment_underwriting_and_report(client: TestClient) -> None:
