@@ -69,20 +69,38 @@ universal address import → detail; estimate labeling; zpid-only incomplete →
 
 ---
 
+## Enrichment redesign — automatic live coverage
+
+Goal: a normal address should auto-populate the maximum *verifiable* coverage on import, with no manual steps and nothing invented.
+
+- **Keyless public providers run automatically.** `live_providers_enabled` now defaults **on** (set explicitly in `docker-compose.yml`; the pytest suite sets it `false` via `conftest.py` to stay hermetic). On import, keyless government sources run with no configuration: the **U.S. Census geocoder/geographies**, **FEMA NFHL flood**, and a new **USGS EPQS elevation** adapter.
+- **One geocoder call populates the record.** The geocoder switched to `/geographies/onelineaddress`, so a single keyless request resolves coordinates **and** census geographies. Verified `latitude`, `longitude`, `postal_code`, and `county` are persisted onto the property (never overwriting user-entered values), and the tract is reused in-run by the demographics adapter.
+- **Honest credential gating.** The ACS *data* API now requires a free Census key, so `census_demographics` self-gates on `census_api_key` (and actually sends it) — genuinely unavailable, with an actionable reason, until configured. Google routing/places remain gated on their keys.
+- **Resilient, non-poisoning HTTP.** FEMA's public ArcGIS endpoint intermittently returns an HTTP-200 error envelope; these are now surfaced as a clear, retryable provider error (not a vague "malformed" or a fabricated determination) and are **not cached**, so a transient failure no longer pins for the cache TTL. Transient failures refresh their reason; a previously-live fact is still preserved across a blip.
+- **Verified against the real address.** `139 County Route 21c, Ghent, NY` now resolves to `139 CO RD 21C, GHENT, NY, 12075`, county **Columbia**, coords `42.2612, -73.6057`, elevation ~741 ft — all live/verifiable. Demographics (needs the free key) and FEMA (rate-limited during testing) are disclosed as unavailable, not invented. Confidence rose from 0 → ~5 on real coverage.
+
+**Underwriting untouched:** no change to formulas, weights, thresholds, hard constraints, or scoring. Enrichment only supplies facts and provenance.
+
+New tests (backend): geocoder locality/geography population and no-overwrite; elevation parsing; demographics key gating; FEMA error-envelope disclosure; error envelopes are not cached. Suite: **51 passing**, hermetic.
+
+---
+
 ## Remaining known limitations
 
-1. **URL parsing is heuristic, not a licensed feed.** Land/parcel URLs (LandWatch) and zpid-only Zillow links legitimately carry no street address, so they are marked incomplete (correct, not fabricated) and require Resolve. Facts (beds/baths/price/flood/comps) still need enrichment providers.
-2. **Live enrichment providers are unconfigured by default** (`live_providers_enabled=false`), so enrichment, valuation, and live comparables are unavailable — disclosed in the UI, never invented. Configure credentials to populate them.
-3. **Financials are workbook estimates until inputs are entered.** With no asking price, figures come from the default scenario and are labeled as estimates; enter asking price/taxes for property-specific returns.
-4. **"Investment Score" and "Risk Score" are not separate model outputs.** Represented honestly by the Buy score and by the Risk summary / hard-constraint list rather than invented numbers.
-5. **Legacy `Unknown/NA` rows** are now flagged incomplete with a Resolve action but retain their original stored names until resolved (no destructive backfill was performed).
-6. **Naive CSV escaping** and unbounded listing accumulation from the prior pass are unchanged. *(Low)*
-7. **`PropertyDetailPage.tsx` remains a large `@ts-nocheck` module.** Grew with this work; a future split is warranted.
+1. **URL parsing is heuristic, not a licensed feed.** Land/parcel URLs (LandWatch) and zpid-only Zillow links legitimately carry no street address, so they are marked incomplete (correct, not fabricated) and require Resolve.
+2. **Property facts (price, taxes, beds/baths, acreage) have no free public source** and remain empty for address-only imports — they need a listing/assessor feed or manual entry, and are never invented. Free keyless enrichment covers location, county, tract, ZIP, elevation, and (when the service is up) flood status.
+3. **Some providers need free/paid keys:** ACS demographics needs a free Census key; Google routing/places, assessor, parcel, zoning, STR, schools, and walkability need their respective keys. All are honestly "unavailable" until configured.
+4. **FEMA's public NFHL service is rate-limited/flaky.** It returns real flood determinations when healthy but was erroring during testing; the flood field is disclosed as temporarily unavailable and repopulates on refresh once the service recovers.
+5. **Financials are workbook estimates until inputs are entered.** With no asking price, figures come from the default scenario and are labeled as estimates; enter asking price/taxes for property-specific returns.
+6. **"Investment Score" and "Risk Score" are not separate model outputs.** Represented honestly by the Buy score and by the Risk summary / hard-constraint list rather than invented numbers.
+7. **Legacy `Unknown/NA` rows** are now flagged incomplete with a Resolve action but retain their original stored names until resolved (no destructive backfill was performed).
+8. **Naive CSV escaping** and unbounded listing accumulation from the prior pass are unchanged. *(Low)*
+9. **`PropertyDetailPage.tsx` remains a large `@ts-nocheck` module.** Grew with this work; a future split is warranted.
 
 ---
 
 ## Suggested next priorities
 1. Wire `pytest` + `vitest` + `playwright` into CI so these journeys are guarded automatically.
-2. Configure at least the free public providers (Census geocoder/ACS, FEMA) so imports geocode and coverage rises without paid feeds.
+2. Add a free Census API key (and optionally Google routing/places keys) to unlock demographics and drive-time coverage on top of the now-automatic keyless providers.
 3. Split `PropertyDetailPage.tsx` and remove `@ts-nocheck`.
 4. Optional server-side address canonicalization (street-suffix expansion) behind tests to strengthen dedup further.

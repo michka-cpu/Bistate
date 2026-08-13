@@ -8,7 +8,10 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./bistate.db"
     cors_origins: list[str] = ["http://localhost:5173"]
     upload_dir: str = "./uploads"
-    live_providers_enabled: bool = False
+    # Keyless public providers (Census geocoder/geographies, FEMA flood, USGS elevation)
+    # run automatically so a normal address gets maximum verifiable coverage on import.
+    # Tests set LIVE_PROVIDERS_ENABLED=false to stay hermetic (no network).
+    live_providers_enabled: bool = True
     provider_timeout_seconds: float = 8
     provider_retry_count: int = 2
     provider_cache_seconds: int = 3600

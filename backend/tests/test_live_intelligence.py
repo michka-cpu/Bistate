@@ -40,6 +40,8 @@ def test_google_routing_and_places_are_persisted_with_provenance(monkeypatch) ->
     monkeypatch.setattr(settings, "places_api_key", "places-key")
 
     def response(url, params):
+        if "hazards.fema.gov" in url:
+            return {"features": []}  # keyless FEMA lookup: outside a special flood hazard area
         if "directions" in url:
             return {"status": "OK", "routes": [{"legs": [{"distance": {"value": 16093, "text": "10 mi"}, "duration": {"value": 1200, "text": "20 mins"}}]}]}
         return {"status": "OK", "results": [{"name": "Hudson Amtrak", "vicinity": "Hudson, NY", "place_id": "place-1", "geometry": {"location": {"lat": 42.25, "lng": -73.8}}}]}
@@ -119,3 +121,91 @@ def test_census_geocoder_persists_coordinates(monkeypatch) -> None:
     field = enrichment.CensusGeocoder().fetch(prop)
     assert field["value"]["latitude"] == 42.25
     assert (prop.latitude, prop.longitude) == (42.25, -73.8)
+
+
+def test_census_geocoder_populates_locality_and_geography(monkeypatch) -> None:
+    """One keyless geographies call resolves and persists coordinates, ZIP, and county,
+    and stashes the tract for the demographics adapter to reuse."""
+    from app.services import enrichment
+    prop = Property(name="Ghent", address="139 County Route 21C", city="Ghent", state="NY")
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    response = {"result": {"addressMatches": [{
+        "matchedAddress": "139 CO RD 21C, GHENT, NY, 12075",
+        "coordinates": {"x": -73.6057, "y": 42.2612},
+        "addressComponents": {"zip": "12075", "state": "NY"},
+        "geographies": {
+            "Counties": [{"NAME": "Columbia County"}],
+            "County Subdivisions": [{"NAME": "Ghent town"}],
+            "Census Tracts": [{"STATE": "36", "COUNTY": "021", "TRACT": "000700"}],
+        },
+    }]}}
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_args, **_kwargs: response)
+    field = enrichment.CensusGeocoder().fetch(prop)
+    assert field["retrieval_status"] == "live"
+    assert (prop.latitude, prop.longitude) == (42.2612, -73.6057)
+    assert prop.postal_code == "12075"
+    assert prop.county == "Columbia"  # trailing "County" stripped, not invented
+    assert field["value"]["census_tract"] == "000700"
+    assert prop._census_geography == {"state": "36", "county": "021", "tract": "000700"}
+
+
+def test_census_geocoder_does_not_overwrite_user_locality(monkeypatch) -> None:
+    from app.services import enrichment
+    prop = Property(name="X", address="1 A St", city="Hudson", state="NY", county="Existing", postal_code="99999")
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"result": {"addressMatches": [{"coordinates": {"x": -73.8, "y": 42.25}, "addressComponents": {"zip": "12534"}, "geographies": {"Counties": [{"NAME": "Columbia County"}], "Census Tracts": [{"STATE": "36", "COUNTY": "021", "TRACT": "000700"}]}}]}})
+    enrichment.CensusGeocoder().fetch(prop)
+    assert prop.county == "Existing" and prop.postal_code == "99999"
+
+
+def test_fema_error_envelope_is_disclosed_not_faked(monkeypatch) -> None:
+    """A rate-limited FEMA response (HTTP 200 with an error envelope) is reported as a
+    retryable provider error, never as a fabricated flood determination."""
+    from app.services import enrichment
+    prop = Property(name="X", address="1 A St", city="Hudson", state="NY", latitude=42.26, longitude=-73.6)
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"error": {"code": 400, "message": "Failed to execute query."}})
+    data, errors = enrichment.enrich_property(prop)
+    assert data["fema_flood"]["value"] is None
+    assert "FEMA" in data["fema_flood"]["missing_reason"]
+    assert "fema_flood" in errors
+
+
+def test_error_envelopes_are_not_cached(monkeypatch) -> None:
+    from app.services import enrichment
+    calls = []
+    class Resp:
+        def __init__(self, body): self.body = body
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def read(self): return self.body
+    def fake_urlopen(*_a, **_k):
+        calls.append(1)
+        return Resp(b'{"error": {"code": 400}}')
+    monkeypatch.setattr(enrichment, "urlopen", fake_urlopen)
+    client = enrichment.JsonHttpClient()
+    client.get("https://svc.example/q", {"a": "1"})
+    client.get("https://svc.example/q", {"a": "1"})
+    assert len(calls) == 2  # error envelope was not cached, so both calls hit the network
+
+
+def test_elevation_provider_returns_feet(monkeypatch) -> None:
+    from app.services import enrichment
+    prop = Property(name="X", address="1 A St", city="Hudson", state="NY", latitude=42.26, longitude=-73.6)
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"value": 740.48})
+    field = enrichment.ElevationProvider().fetch(prop)
+    assert field["retrieval_status"] == "live"
+    assert field["value"]["elevation_feet"] == 740.5
+
+
+def test_demographics_requires_a_free_census_key(monkeypatch) -> None:
+    """Without census_api_key the ACS data API is genuinely unavailable — disclosed, not faked."""
+    from app.services import enrichment
+    prop = Property(name="X", address="1 A St", city="Hudson", state="NY", latitude=42.26, longitude=-73.6)
+    settings = enrichment.get_settings()
+    monkeypatch.setattr(settings, "live_providers_enabled", True)
+    monkeypatch.setattr(settings, "census_api_key", None)
+    field = enrichment.CensusDemographicsProvider().fetch(prop)
+    assert field["value"] is None
+    assert "Census API key" in field["missing_reason"]
