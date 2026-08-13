@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AcquisitionPipeline, Dashboard, KpiGrid, PipelineProgress, TabContent, StatusDot, EmptyState, EstimateBanner, IncompleteListingBanner } from '../components/PropertyDetailPage'
 import { ExportMenu } from '../components/ExportMenu'
+import { buildImportBody } from '../lib/importInput'
 import type { FormEvent } from 'react'
 
 type EnrichmentField = { value: unknown; source: string; retrieval_status?: 'live' | 'unavailable'; last_updated: string | null; confidence: number; missing_reason?: string | null }
@@ -95,15 +96,22 @@ export default function DashboardPage({ focusPropertyId = null, onOpenDiscovery 
 
   async function importProperty(event: FormEvent) {
     event.preventDefault()
-    if (!importValue.trim()) return
+    const { body, error: classifyError } = buildImportBody(importValue)
+    if (classifyError || !body) { setError(classifyError ?? 'Enter a full address or a supported listing URL.'); return }
     setBusy(true); setError('')
-    const value = importValue.trim()
-    const body = value.startsWith('http') ? { listing_url: value } : (/^MLS[-\s#]/i.test(value) ? { mls_number: value } : { raw_address: value })
     try {
       const response = await fetch('/api/properties/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      if (!response.ok) throw new Error('Import failed. Check the listing URL, address, or MLS number.')
+      // An already-imported property is not a failure — open the existing record.
+      if (response.status === 409) {
+        const detail = (await response.json().catch(() => ({}))) as { detail?: string }
+        const match = /id=(\d+)/.exec(detail.detail ?? '')
+        if (match) { setImportValue(''); setActiveTab('Overview'); await loadProperties(Number(match[1])); return }
+        throw new Error('This property is already in your pipeline.')
+      }
+      if (response.status === 422) throw new Error('That input could not be understood. Paste a full address or a supported listing URL.')
+      if (!response.ok) throw new Error('Import failed. Check the address or listing URL and try again.')
       const property = await response.json() as Property
-      setImportValue(''); await loadProperties(property.id); await loadWorkspace(property.id)
+      setImportValue(''); setActiveTab('Overview'); await loadProperties(property.id); await loadWorkspace(property.id)
     } catch (reason) { setError((reason as Error).message) } finally { setBusy(false) }
   }
 

@@ -2,18 +2,20 @@
 // @ts-nocheck
 import { useEffect, useState } from 'react'
 import { PropertyIntelligence } from './PropertyIntelligence'
+import { AnalysisIncomplete } from './AnalysisIncomplete'
+import { analysisIncomplete } from '../lib/analysis'
 
 
 export function TabContent({ tab, property, properties, memo, notes, tasks, documents, valuation, refresh, onResolve, onRefresh, liveProvidersOff }: { tab: Tab; property: Property; properties: Property[]; memo: Memo | null; notes: Note[]; tasks: Task[]; documents: Document[]; valuation: Valuation | null; refresh: () => Promise<void>; onResolve?: (address?: string) => void; onRefresh?: () => void; liveProvidersOff?: boolean }) {
   const output = property.underwriting_output
-  const estimate = Boolean(property.financials_are_estimates)
+  const incomplete = analysisIncomplete(property)
   if (tab === 'Overview') return <Overview property={property} memo={memo} tasks={tasks} refresh={refresh} onResolve={onResolve} liveProvidersOff={liveProvidersOff} />
   if (tab === 'Listing') return <ListingSection property={property} onResolve={onResolve} />
   if (tab === 'Property Intelligence') return <PropertyIntelligence propertyId={property.id} onRefreshed={refresh} />
   if (tab === 'Activity Timeline') return <ActivityTimeline property={property} notes={notes} documents={documents} />
-  if (tab === 'Financials') return <><EstimateNote estimate={estimate} property={property} /><DataSection title="Workbook financial summary" data={output?.dashboard ?? {}} /></>
-  if (tab === 'Underwriting') return <><EstimateNote estimate={estimate} property={property} /><div className="two-column"><DataSection title="Assumptions used" data={output?.assumptions ?? {}} /><DataSection title="Traceability" data={output?.traceability ?? {}} /></div></>
-  if (tab === 'Renovation') return <DataSection title="Renovation range and categories" data={output?.renovation ?? {}} />
+  if (tab === 'Financials') return incomplete ? <AnalysisIncomplete property={property} heading="Financials — analysis incomplete" context="workbook financial output" /> : <DataSection title="Workbook financial summary" data={output?.dashboard ?? {}} />
+  if (tab === 'Underwriting') return incomplete ? <AnalysisIncomplete property={property} heading="Underwriting — analysis incomplete" context="workbook assumptions and traceability" /> : <div className="two-column"><DataSection title="Assumptions used" data={output?.assumptions ?? {}} /><DataSection title="Traceability" data={output?.traceability ?? {}} /></div>
+  if (tab === 'Renovation') return incomplete ? <AnalysisIncomplete property={property} heading="Renovation — analysis incomplete" context="renovation budget and ranges" /> : <DataSection title="Renovation range and categories" data={output?.renovation ?? {}} />
   if (tab === 'Airbnb') return <Suitability title="Airbnb suitability" score={property.airbnb_score} field={property.enrichment_data.airbnb_suitability} />
   if (tab === 'Wedding Venue') return <Suitability title="Wedding venue suitability" score={property.wedding_score} field={property.enrichment_data.wedding_suitability} />
   if (tab === 'Personal Use') return <PersonalUse property={property} />
@@ -30,10 +32,12 @@ function Metric({ label, value }: { label: string; value: string }) { return <ar
 function Overview({ property, memo, tasks, refresh, onResolve, liveProvidersOff }: { property: Property; memo: Memo | null; tasks: Task[]; refresh: () => Promise<void>; onResolve?: (address?: string) => void; liveProvidersOff?: boolean }) {
   const images = Array.isArray(property.images) ? property.images : []; const missingInformation = Array.isArray(memo?.missing_information) ? memo.missing_information : []
   const estimate = Boolean(property.financials_are_estimates)
+  const incomplete = analysisIncomplete(property)
   return <div className="overview">
-    <ScoreSummary property={property} />
-    <KeyFinancials property={property} estimate={estimate} />
-    <WhyPanel property={property} memo={memo} liveProvidersOff={liveProvidersOff} onResolve={onResolve} />
+    {incomplete
+      ? <AnalysisIncomplete property={property} heading="Analysis incomplete" context="Overall/Buy/Airbnb/Wedding/Personal scores, cash required, cap rate, cash-on-cash, and IRR" />
+      : <><ScoreSummary property={property} /><KeyFinancials property={property} estimate={estimate} /></>}
+    <WhyPanel property={property} memo={memo} liveProvidersOff={liveProvidersOff} onResolve={onResolve} incomplete={incomplete} />
     <div className="overview-grid">
       {images.length > 0 && <article className="panel"><div className="panel-title"><span>Listing gallery</span></div><div className="chip-list">{images.map((image) => <a key={image} href={image} target="_blank" rel="noreferrer">Listing photo ↗</a>)}</div></article>}
       <article className="panel memo-panel"><div className="panel-title"><span>Investment memo</span><span className="confidence-pill">{Math.round(property.confidence_score ?? 0)}% confidence</span></div><p className="summary">{memo?.executive_summary ?? 'Investment memo is being prepared.'}</p><MemoList title="Strengths" items={Array.isArray(memo?.strengths) ? memo.strengths : []} tone="positive" /><MemoList title="Risks & weaknesses" items={[...(Array.isArray(memo?.weaknesses) ? memo.weaknesses : []), ...(Array.isArray(memo?.risks) ? memo.risks : [])]} tone="warning" /></article>
@@ -75,21 +79,25 @@ function KeyFinancials({ property, estimate }: { property: Property; estimate: b
 
 // "Why this scored this way": strongest positives, biggest risks, hard-constraint failures,
 // and the most important missing information — all read from persisted output; no new scoring.
-function WhyPanel({ property, memo, liveProvidersOff, onResolve }: { property: Property; memo: Memo | null; liveProvidersOff?: boolean; onResolve?: (address?: string) => void }) {
+function WhyPanel({ property, memo, liveProvidersOff, onResolve, incomplete }: { property: Property; memo: Memo | null; liveProvidersOff?: boolean; onResolve?: (address?: string) => void; incomplete?: boolean }) {
   const dashboard = property.underwriting_output?.dashboard ?? {}
   const zero = property.underwriting_output?.zero_revenue_affordability ?? {}
-  const positives = Array.isArray(memo?.strengths) ? memo.strengths : []
+  // Positives and hard-constraint checks derive from the (default) workbook output, so
+  // they are not meaningful until the analysis is complete; suppress them when gated.
+  const positives = incomplete ? [] : (Array.isArray(memo?.strengths) ? memo.strengths : [])
   const risks = [...(Array.isArray(memo?.risks) ? memo.risks : []), ...(Array.isArray(memo?.weaknesses) ? memo.weaknesses : [])]
   const constraints: string[] = []
-  if (typeof dashboard.dscr === 'number' && dashboard.dscr < 1.25) constraints.push(`Debt service coverage is ${dashboard.dscr.toFixed(2)}× (below the 1.25× target).`)
-  if (typeof dashboard.cash_on_cash_return === 'number' && dashboard.cash_on_cash_return <= 0) constraints.push('Base-case cash-on-cash return is not positive.')
-  if (zero.status === 'FAIL') constraints.push('Zero-revenue affordability ceiling is exceeded.')
+  if (!incomplete) {
+    if (typeof dashboard.dscr === 'number' && dashboard.dscr < 1.25) constraints.push(`Debt service coverage is ${dashboard.dscr.toFixed(2)}× (below the 1.25× target).`)
+    if (typeof dashboard.cash_on_cash_return === 'number' && dashboard.cash_on_cash_return <= 0) constraints.push('Base-case cash-on-cash return is not positive.')
+    if (zero.status === 'FAIL') constraints.push('Zero-revenue affordability ceiling is exceeded.')
+  }
   const missing = Array.isArray(memo?.missing_information) ? memo.missing_information.slice(0, 8) : []
   return <section className="panel why-panel"><div className="panel-title"><span>Why this scored this way</span></div>
     <div className="why-grid">
-      <WhyList title="Strongest positives" tone="positive" items={positives} empty="No positive factors are supported by stored data yet." />
+      <WhyList title="Strongest positives" tone="positive" items={positives} empty={incomplete ? 'Awaiting required inputs before assessing.' : 'No positive factors are supported by stored data yet.'} />
       <WhyList title="Biggest risks" tone="warning" items={risks} empty="No risks identified yet." />
-      <WhyList title="Hard-constraint failures" tone="danger" items={constraints} empty="No hard-constraint failures in the current output." />
+      <WhyList title="Hard-constraint failures" tone="danger" items={constraints} empty={incomplete ? 'Awaiting required inputs before assessing.' : 'No hard-constraint failures in the current output.'} />
       <WhyList title="Important missing information" tone="muted" items={missing.map(labelize)} empty="Nothing critical is missing." />
     </div>
     {liveProvidersOff && <p className="score-caveat">Live enrichment providers are off in this environment, so location, flood, and market facts were not retrieved.</p>}
@@ -153,11 +161,6 @@ export function IncompleteListingBanner({ property, busy, onResolve }: { propert
   </div>
 }
 
-function EstimateNote({ estimate, property }: { estimate: boolean; property: Property }) {
-  if (!estimate) return null
-  const missing = Array.isArray(property.missing_core_inputs) ? property.missing_core_inputs : []
-  return <div className="estimate-note">Estimated output — computed from workbook defaults because these inputs are missing: {missing.length ? missing.map(labelize).join(', ') : 'asking price'}.</div>
-}
 
 function ListingSection({ property, onResolve }: { property: Property; onResolve?: (address?: string) => void }) {
   const data = { name: property.name, address: property.address, city: property.city, state: property.state, postal_code: property.postal_code, county: property.county, property_type: property.property_type, asking_price: property.asking_price, annual_taxes: property.annual_taxes, listing_source: property.listing_source, mls_number: property.mls_number, listing_status: property.status, description: property.description }

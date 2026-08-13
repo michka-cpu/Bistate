@@ -90,6 +90,14 @@ def _clean_county(name: str | None) -> str | None:
     return re.sub(r"\s+(County|Parish|Borough|Census Area)$", "", name.strip(), flags=re.IGNORECASE) or None
 
 
+def _is_placeholder_city(value: str | None) -> bool:
+    return (value or "").strip() in ("", "Unknown")
+
+
+def _is_placeholder_state(value: str | None) -> bool:
+    return (value or "").strip().upper() in ("", "NA")
+
+
 class CensusGeocoder:
     """Keyless public geocoder. A single request resolves coordinates *and* census
     geographies (county, tract, ZIP), which are persisted onto the property so a normal
@@ -97,7 +105,12 @@ class CensusGeocoder:
     key, source, required_setting = "geocoding", "U.S. Census Geocoder", None
     def fetch(self, prop: Property) -> dict[str, Any]:
         if not get_settings().live_providers_enabled: return unavailable("Live public providers are disabled")
-        address = ", ".join(filter(None, [prop.address, prop.city, prop.state, prop.postal_code]))
+        # Build the query from the street plus only *real* locality values. Placeholder
+        # city/state (Unknown/NA left by an imperfect parse) would otherwise pollute the
+        # query and prevent a match, so they are dropped and the geocoder recovers them.
+        query_city = None if _is_placeholder_city(prop.city) else prop.city
+        query_state = None if _is_placeholder_state(prop.state) else prop.state
+        address = ", ".join(filter(None, [prop.address, query_city, query_state, prop.postal_code]))
         data = HTTP.get("https://geocoding.geo.census.gov/geocoder/geographies/onelineaddress", {"address": address, "benchmark": "Public_AR_Current", "vintage": "Current_Current", "format": "json"})
         matches = data.get("result", {}).get("addressMatches", [])
         if not matches: return unavailable("Address was not matched by the U.S. Census Geocoder")
@@ -110,9 +123,13 @@ class CensusGeocoder:
         county_name = ((geographies.get("Counties") or [{}])[0]).get("NAME")
         tract = (geographies.get("Census Tracts") or [{}])[0]
         subdivision = ((geographies.get("County Subdivisions") or [{}])[0]).get("NAME")
-        # Persist verified structured facts onto the record without overwriting user input.
+        # Backfill verified structured facts from the authoritative match. Placeholder
+        # locality values are corrected; real user-entered values are never overwritten.
         zip_code = components.get("zip")
+        matched_city, matched_state = components.get("city"), components.get("state")
         if zip_code and not prop.postal_code: prop.postal_code = zip_code
+        if matched_city and _is_placeholder_city(prop.city): prop.city = matched_city.title()
+        if matched_state and _is_placeholder_state(prop.state): prop.state = matched_state.upper()[:2]
         cleaned_county = _clean_county(county_name)
         if cleaned_county and not prop.county: prop.county = cleaned_county
         # Stash the resolved geography so the demographics adapter can reuse it in-run.

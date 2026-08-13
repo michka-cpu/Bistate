@@ -48,10 +48,12 @@ def import_property(payload: PropertyImport, db: Session = Depends(get_db)) -> P
     db.add(prop)
     db.flush()
     _run_pipeline(prop)
-    message = "Property imported (listing information incomplete)" if listing.needs_resolution else "Property imported"
+    # Resolution is judged AFTER enrichment: live geocoding can backfill a locality the
+    # parser could not, so a valid street address is not left flagged as incomplete.
+    unresolved = _locality_unresolved(prop)
+    message = "Property imported (listing information incomplete)" if unresolved else "Property imported"
     db.add(PropertyActivityEvent(property_id=prop.id, event_type="imported", message=message))
-    # An unresolved listing needs an address before diligence can be trusted.
-    prop.status = "Needs Info" if listing.needs_resolution else "Reviewing"
+    prop.status = "Needs Info" if unresolved else "Reviewing"
     db.commit()
     db.refresh(prop)
     return prop
@@ -156,6 +158,17 @@ def _run_pipeline(prop: Property, refresh: bool = False) -> None:
     prop.pipeline_state["underwrite"] = "completed"
     prop.pipeline_state["memo"] = "completed"
     prop.activity_events.append(PropertyActivityEvent(event_type="refreshed" if refresh else "analyzed", message="Analysis completed"))
+
+
+def _locality_unresolved(prop: Property) -> bool:
+    """True when the record still lacks a real city/state after enrichment — the same
+    signal the API exposes as ``listing_incomplete``. A geocoded street address with a
+    resolved locality is considered complete regardless of the initial parse."""
+    import re as _re
+    placeholder_city = (prop.city or "").strip() in ("", "Unknown")
+    placeholder_state = (prop.state or "").strip().upper() in ("", "NA")
+    looks_like_reference = bool(_re.search(r"\d+\s*zpid|\blisting\s+\d", prop.name or "", flags=_re.IGNORECASE))
+    return placeholder_city or placeholder_state or looks_like_reference
 
 
 def _normalize_address(value: str | None) -> str:

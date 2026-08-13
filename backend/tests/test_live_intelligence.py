@@ -149,6 +149,22 @@ def test_census_geocoder_populates_locality_and_geography(monkeypatch) -> None:
     assert prop._census_geography == {"state": "36", "county": "021", "tract": "000700"}
 
 
+def test_census_geocoder_backfills_placeholder_locality(monkeypatch) -> None:
+    """A street parsed without a locality (Unknown/NA) is completed from the authoritative
+    Census match, so a geocodable address is never left flagged as incomplete."""
+    from app.services import enrichment
+    prop = Property(name="139 County Route 21C", address="139 County Route 21C", city="Unknown", state="NA")
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"result": {"addressMatches": [{
+        "matchedAddress": "139 CO RD 21C, GHENT, NY, 12075",
+        "coordinates": {"x": -73.6057, "y": 42.2612},
+        "addressComponents": {"zip": "12075", "state": "NY", "city": "GHENT"},
+        "geographies": {"Counties": [{"NAME": "Columbia County"}], "Census Tracts": [{"STATE": "36", "COUNTY": "021", "TRACT": "000700"}]},
+    }]}})
+    enrichment.CensusGeocoder().fetch(prop)
+    assert prop.city == "Ghent" and prop.state == "NY" and prop.postal_code == "12075"
+
+
 def test_census_geocoder_does_not_overwrite_user_locality(monkeypatch) -> None:
     from app.services import enrichment
     prop = Property(name="X", address="1 A St", city="Hudson", state="NY", county="Existing", postal_code="99999")

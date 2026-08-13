@@ -14,8 +14,26 @@ test.describe('Core property journey', () => {
 
     // Lands directly on the property detail (pipeline) view — not merely "added to a list".
     await expect(page.locator('.property-hero h1')).toContainText(address.split(',')[0])
-    await expect(page.locator('.score-summary')).toBeVisible()
     await expect(page.getByText('Why this scored this way')).toBeVisible()
+    // No asking price yet → default-workbook numbers are withheld, not shown as results.
+    await expect(page.locator('.analysis-incomplete').first()).toBeVisible()
+    await expect(page.getByText('$418,000')).toHaveCount(0)
+  })
+
+  test('a full address entered in the pipeline Import box opens the property, never "Import failed"', async ({ page }) => {
+    await page.goto('/')
+    const address = `${uniq()} Pipeline Rd, Hudson, NY 12534`
+    // First create it via the pipeline import box.
+    await page.getByRole('button', { name: 'Open pipeline' }).click()
+    await page.getByLabel('Listing URL, address, or MLS number').fill(address)
+    await page.getByRole('button', { name: 'Import & analyze' }).click()
+    await expect(page.locator('.property-hero h1')).toContainText(address.split(',')[0])
+    // Re-enter the SAME address in the pipeline box: it must open the existing property, not error.
+    await page.getByLabel('Listing URL, address, or MLS number').fill(address)
+    await page.getByRole('button', { name: 'Import & analyze' }).click()
+    await expect(page.locator('.property-hero h1')).toContainText(address.split(',')[0])
+    await expect(page.getByText('Import failed')).toHaveCount(0)
+    await expect(page.getByText('did not contain a full street address')).toHaveCount(0)
   })
 
   test('an address-only import is clearly labeled as an estimate', async ({ page }) => {

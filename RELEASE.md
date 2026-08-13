@@ -1,3 +1,20 @@
+# Release Notes
+
+## Acceptance fix — valid address reported "Import failed" / "incomplete"; financial-failure gating
+
+A full US address (`139 County Route 21c, Ghent, NY 12075`) entered in the pipeline **Import & analyze** box returned **"Import failed"** and then an incomplete-listing banner. Root causes (both general, reproduced in-browser):
+
+1. **Duplicate treated as failure.** The pipeline import handler (`DashboardPage.importProperty`) sent the correct full `raw_address`; the backend correctly returned **409** (the property already existed), but the handler did `if (!response.ok) throw 'Import failed'` — so an *already-imported* address surfaced as a hard error instead of opening the existing property. (Discovery's box handled 409; the pipeline box did not.) Fixed by unifying both boxes on a shared `buildImportBody` classifier and handling **409 → open existing / 422 → clear message**. A valid address now imports once and opens the property; a re-entry opens the same record — never "Import failed", never an unresolved duplicate, never a "Resolve" prompt.
+2. **Geocoded address left "incomplete".** When the naive comma-parser couldn't extract a locality it stored `Unknown/NA`, and the live geocoder resolved coordinates/county but **never backfilled city/state** — so a geocodable address stayed flagged incomplete. Fixed: the Census geocoder now **backfills city/state/ZIP from the authoritative match** (placeholders only, never user values) and excludes placeholder locality from its query; import decides resolution **after** enrichment. The API also normalizes whitespace-only identifiers to reject empty imports.
+
+**Financial-failure gating (presentation only — no underwriting change).** When identity is unresolved or the critical inputs for property-specific underwriting are absent, the app no longer displays default-workbook outputs as if they were results (Overall 71/100, $418k cash, 19.3% CoC, 22.3% IRR, 22.4% cap, 3.59× DSCR, $172.5k renovation). Those areas — the hero KPI row, the Overview score/financial summary, and the Financials/Underwriting/Renovation tabs — are replaced with an explicit **"Analysis incomplete"** state listing exactly what is required (asking price, taxes, acreage, beds/baths, sq ft, and a resolved address). Numbers reappear automatically once the inputs exist. The underwriting engine, weights, thresholds, and workbook logic are untouched.
+
+**Manual verification** (`139 County Route 21c, Ghent, NY 12075`, both import boxes): opens property id=5 with **no "Import failed"** and **no incomplete banner**; status **Reviewing**. Populated (live/verifiable): matched address `139 CO RD 21C, GHENT, NY, 12075`, city **Ghent**, state **NY**, ZIP **12075**, county **Columbia**, coordinates **42.2612 / −73.6057**, census tract 000700, **elevation 741.1 ft** (USGS). Unavailable (disclosed, not invented): **FEMA flood** — public NFHL service returning error 400 (temporarily rate-limited); **ACS demographics** — needs a free `census_api_key`; assessor/parcel/zoning/STR/schools/walkability/routing/places — need their keys. Property facts (price, taxes, beds/baths, acreage) have no free source and stay empty. **Confidence ≈ 5/100**; financial results correctly gated as "Analysis incomplete".
+
+**Tests added:** backend regression classes — full address, abbreviated road forms (`Co Rd`, `County Route`, `State Route`), duplicate re-entry (409 + id), partial address (incomplete), full-address listing URL, invalid/whitespace/malformed input, geocoder locality backfill. Frontend — `buildImportBody` classification, pipeline-box duplicate opens existing (no "Import failed"), analysis-incomplete gating. E2e — pipeline-box duplicate opens the property; the punctuation-variant test updated to the corrected open-existing behavior. Suites: **backend 58, frontend build/lint/15, Playwright 16** — all green.
+
+---
+
 # Release Notes — Core User Journey
 
 Branch: `fix/core-user-journey`
