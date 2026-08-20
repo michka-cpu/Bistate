@@ -221,6 +221,74 @@ class ElevationProvider:
         return live({"elevation_feet": elevation, "datum": "NAVD88"}, self.source, 0.85)
 
 
+def _attr(attrs: dict[str, Any], field: str | None) -> Any:
+    """Read an ArcGIS attribute by a (possibly absent) field name; blanks become None."""
+    if not field: return None
+    value = attrs.get(field)
+    text = "" if value is None else str(value).strip()
+    return text or None
+
+
+# Public, keyless county zoning GIS layers. Each entry is a REAL, verified ArcGIS
+# zoning-district polygon layer, point-queryable without a token; the field names were
+# confirmed against live responses. Counties absent here yield an honest "unavailable"
+# instead of a fabricated district. Keys are lowercase county names (no "County" suffix).
+# First supported market: the Catskills (NY). Only Ulster publishes a clean county-wide
+# zoning polygon layer; Greene and Delaware NY publish none, and Sullivan only fragmentary
+# per-town corridor layers — those stay honestly unavailable until a reliable source exists.
+ZONING_GIS_SOURCES: dict[str, dict[str, Any]] = {
+    "ulster": {
+        "url": "https://gis.ulstercountyny.gov/server/rest/services/Parcel_Viewer/Municipal_Zoning/MapServer/33/query",
+        "name": "Ulster County Planning Board zoning (public ArcGIS)",
+        "code_field": "ZONE_CODE",      # e.g. "B-2", "HC", "R-2"
+        "desc_field": "ZONE_DESC",      # e.g. "Core Business", "Hamlet Commercial"
+        "general_field": "ZONE_GENERAL",  # coarse category, e.g. "Business", "Mixed Use"
+        "year_field": "YEAR",           # town-submitted map vintage (mixed)
+    },
+}
+
+
+class ZoningProvider:
+    """Keyless municipal-zoning lookup for supported markets.
+
+    US zoning is administered per-municipality and has no national API, so this provider
+    queries a small registry of *verified* public county ArcGIS zoning-district layers by
+    point-in-polygon — the same technique as the FEMA flood lookup. Outside a covered
+    county, or where a county leaves an area unzoned (the query returns no polygon), it
+    reports an honest "unavailable" rather than inventing a district."""
+    key, source, required_setting = "zoning", "County zoning GIS (public ArcGIS)", None
+
+    def fetch(self, prop: Property) -> dict[str, Any]:
+        if not get_settings().live_providers_enabled: return unavailable("Live public providers are disabled")
+        if prop.latitude is None or prop.longitude is None: return unavailable("Latitude and longitude are required for a zoning lookup")
+        county = _clean_county(prop.county)
+        entry = ZONING_GIS_SOURCES.get((county or "").lower())
+        if not entry:
+            where = f"{county} County" if county else "this location"
+            return unavailable(f"No public zoning GIS service is mapped for {where} yet (outside supported markets)")
+        source = entry["name"]
+        params = {"geometry": f"{prop.longitude},{prop.latitude}", "geometryType": "esriGeometryPoint", "inSR": 4326, "outSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outFields": "*", "returnGeometry": "false", "f": "json"}
+        last_reason = ""
+        for attempt in range(3):
+            data = HTTP.get(entry["url"], params)
+            if isinstance(data, dict) and data.get("error"):
+                last_reason = f"error {data['error'].get('code', '')}"
+            elif not isinstance(data.get("features"), list):
+                last_reason = "response did not include features"
+            else:
+                features = data["features"]
+                if not features:
+                    return unavailable(f"Coordinates fall outside a mapped zoning district in {source}", source)
+                attrs = features[0].get("attributes", {})
+                code = _attr(attrs, entry["code_field"])
+                if not code:
+                    return unavailable("Zoning service returned a district feature without a code", source)
+                return live({"district": code, "description": _attr(attrs, entry.get("desc_field")), "category": _attr(attrs, entry.get("general_field")), "as_of": _attr(attrs, entry.get("year_field"))}, source, 0.85)
+            if attempt < 2:
+                time.sleep(min(2 ** attempt, 4))
+        raise ProviderError(f"County zoning service is temporarily unavailable ({last_reason})")
+
+
 class ConfiguredProvider:
     def __init__(self, key: str, source: str, required_setting: str | None): self.key, self.source, self.required_setting = key, source, required_setting
     def fetch(self, prop: Property) -> dict[str, Any]:
@@ -426,7 +494,7 @@ PROVIDERS: list[Provider] = [
     ConfiguredProvider("parcel_data", "Parcel data provider", "parcel_api_key"),
     ConfiguredProvider("parcel_information", "County parcel provider", "parcel_api_key"),
     ConfiguredProvider("school_ratings", "School ratings provider", "schools_api_key"),
-    ConfiguredProvider("zoning", "County zoning provider", "zoning_api_key"),
+    ZoningProvider(),
     ConfiguredProvider("str_regulations", "STR regulations provider", "str_regulations_api_key"),
     ConfiguredProvider("walkability", "Walkability provider", "walkscore_api_key"),
     ConfiguredProvider("airbnb_intelligence", "STR market-data provider", "airdna_api_key"),
