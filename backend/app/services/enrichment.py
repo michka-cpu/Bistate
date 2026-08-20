@@ -229,22 +229,45 @@ def _attr(attrs: dict[str, Any], field: str | None) -> Any:
     return text or None
 
 
-# Public, keyless county zoning GIS layers. Each entry is a REAL, verified ArcGIS
-# zoning-district polygon layer, point-queryable without a token; the field names were
-# confirmed against live responses. Counties absent here yield an honest "unavailable"
-# instead of a fabricated district. Keys are lowercase county names (no "County" suffix).
-# First supported market: the Catskills (NY). Only Ulster publishes a clean county-wide
-# zoning polygon layer; Greene and Delaware NY publish none, and Sullivan only fragmentary
-# per-town corridor layers — those stay honestly unavailable until a reliable source exists.
-ZONING_GIS_SOURCES: dict[str, dict[str, Any]] = {
-    "ulster": {
+# Public, keyless county zoning GIS layers. Every layer here is REAL and verified —
+# point-queried live, with its field names confirmed against the actual response. Each
+# county maps to an ordered list of zoning-district polygon layers (usually one; several
+# where a county has no single county-wide layer). The provider tries them in turn and
+# returns the first district the point falls inside. Keys are lowercase county names (no
+# "County" suffix). First market: the Catskills (NY).
+_UPDE = "https://services1.arcgis.com/fBc8EJBxQRMcHlei/arcgis/rest/services/UPDE_BND_TownZoning_ply/FeatureServer"
+ZONING_GIS_SOURCES: dict[str, list[dict[str, Any]]] = {
+    # Ulster: a single clean county-wide layer maintained by the county planning board.
+    "ulster": [{
         "url": "https://gis.ulstercountyny.gov/server/rest/services/Parcel_Viewer/Municipal_Zoning/MapServer/33/query",
         "name": "Ulster County Planning Board zoning (public ArcGIS)",
-        "code_field": "ZONE_CODE",      # e.g. "B-2", "HC", "R-2"
-        "desc_field": "ZONE_DESC",      # e.g. "Core Business", "Hamlet Commercial"
+        "code_field": "ZONE_CODE",        # e.g. "B-2", "HC", "R-2"
+        "desc_field": "ZONE_DESC",        # e.g. "Core Business", "Hamlet Commercial"
         "general_field": "ZONE_GENERAL",  # coarse category, e.g. "Business", "Mixed Use"
-        "year_field": "YEAR",           # town-submitted map vintage (mixed)
-    },
+        "year_field": "YEAR",             # town-submitted map vintage (mixed)
+    }],
+    # Sullivan: no county-wide layer exists. The National Park Service Upper Delaware set
+    # publishes verified zoning polygons for six river-corridor towns ONLY (not the Town of
+    # Thompson/Monticello or the county interior). Field names differ per town — each layer
+    # carries its own mapping — and the map vintage is baked into the source label. A point
+    # outside all six falls through to the honest ZONING_NO_PUBLIC_GIS reason below.
+    "sullivan": [
+        {"url": f"{_UPDE}/0/query", "name": "NPS Upper Delaware — Town of Cochecton zoning (2013)", "code_field": "ZONEID", "desc_field": "ZONENAME", "general_field": "GENZONENAM"},
+        {"url": f"{_UPDE}/2/query", "name": "NPS Upper Delaware — Town of Delaware zoning (2013)", "code_field": "ZONEID", "desc_field": "ZONENAME", "general_field": "GENZONENAM"},
+        {"url": f"{_UPDE}/3/query", "name": "NPS Upper Delaware — Town of Fremont zoning (2008)", "code_field": "Desig", "desc_field": "Zone_"},
+        {"url": f"{_UPDE}/5/query", "name": "NPS Upper Delaware — Town of Lumberland zoning (2016)", "code_field": "Dist_Code", "desc_field": "District_N"},
+        {"url": f"{_UPDE}/8/query", "name": "NPS Upper Delaware — Town of Highland zoning (2014)", "code_field": "ZONEID", "desc_field": "ZONENAME", "general_field": "GENZONENAM"},
+        {"url": f"{_UPDE}/9/query", "name": "NPS Upper Delaware — Town of Tusten zoning (2013)", "code_field": "ZONEID", "desc_field": "ZONENAME", "general_field": "GENZONENAM"},
+    ],
+}
+
+# Catskills counties investigated with NO queryable public zoning GIS beyond what is mapped
+# above — only static PDF/eCode maps (confirmed for the Sullivan interior incl. the Town of
+# Thompson/Monticello, and for all of Delaware County NY). When a point matches no mapped
+# layer, the card states this honest, actionable reason rather than inventing a district.
+ZONING_NO_PUBLIC_GIS: dict[str, str] = {
+    "sullivan": "This point is outside the six Upper Delaware corridor towns Bistate maps in Sullivan County. The rest of the county — including the Town of Thompson (Monticello) — publishes zoning only as static maps; confirm the district with the town zoning office.",
+    "delaware": "Delaware County (NY) publishes no public zoning GIS layer, only static town maps. Confirm the district with the town zoning office.",
 }
 
 
@@ -252,41 +275,62 @@ class ZoningProvider:
     """Keyless municipal-zoning lookup for supported markets.
 
     US zoning is administered per-municipality and has no national API, so this provider
-    queries a small registry of *verified* public county ArcGIS zoning-district layers by
-    point-in-polygon — the same technique as the FEMA flood lookup. Outside a covered
-    county, or where a county leaves an area unzoned (the query returns no polygon), it
-    reports an honest "unavailable" rather than inventing a district."""
+    queries a registry of *verified* public ArcGIS zoning-district layers by point-in-polygon
+    — the same technique as the FEMA flood lookup — trying each of a county's layers until the
+    point falls inside a district. Where no layer matches (an unzoned area, or a county that
+    publishes only static maps) it reports an honest "unavailable" and never invents a
+    district."""
     key, source, required_setting = "zoning", "County zoning GIS (public ArcGIS)", None
 
     def fetch(self, prop: Property) -> dict[str, Any]:
         if not get_settings().live_providers_enabled: return unavailable("Live public providers are disabled")
         if prop.latitude is None or prop.longitude is None: return unavailable("Latitude and longitude are required for a zoning lookup")
         county = _clean_county(prop.county)
-        entry = ZONING_GIS_SOURCES.get((county or "").lower())
-        if not entry:
-            where = f"{county} County" if county else "this location"
-            return unavailable(f"No public zoning GIS service is mapped for {where} yet (outside supported markets)")
-        source = entry["name"]
+        key = (county or "").lower()
+        layers = ZONING_GIS_SOURCES.get(key)
+        if not layers:
+            reason = ZONING_NO_PUBLIC_GIS.get(key)
+            if not reason:
+                where = f"{county} County" if county else "this location"
+                reason = f"No public zoning GIS service is mapped for {where} yet (outside supported markets)"
+            return unavailable(reason)
         params = {"geometry": f"{prop.longitude},{prop.latitude}", "geometryType": "esriGeometryPoint", "inSR": 4326, "outSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outFields": "*", "returnGeometry": "false", "f": "json"}
-        last_reason = ""
+        saw_clean_miss = False
+        for layer in layers:
+            outcome = self._query_layer(layer, params)
+            if isinstance(outcome, dict):
+                return live(outcome, layer["name"], 0.85)
+            if outcome == "miss":
+                saw_clean_miss = True
+        # No layer's polygon contained the point. If at least one layer answered cleanly
+        # (an honest miss), report that; if every layer failed transiently, raise so a prior
+        # live fact is retained rather than overwritten with a false "no zoning".
+        if not saw_clean_miss:
+            raise ProviderError("County zoning service is temporarily unavailable")
+        fallback = ZONING_NO_PUBLIC_GIS.get(key)
+        return unavailable(fallback or f"Coordinates fall outside a mapped zoning district in {county} County", self.source)
+
+    def _query_layer(self, layer: dict[str, Any], params: dict[str, Any]) -> dict[str, Any] | str:
+        """Query one zoning layer. Returns the district dict on a hit, the string "miss" on a
+        clean empty/uncoded response, or "error" if the layer failed after retries."""
         for attempt in range(3):
-            data = HTTP.get(entry["url"], params)
+            data = HTTP.get(layer["url"], params)
             if isinstance(data, dict) and data.get("error"):
-                last_reason = f"error {data['error'].get('code', '')}"
+                pass
             elif not isinstance(data.get("features"), list):
-                last_reason = "response did not include features"
+                pass
             else:
                 features = data["features"]
                 if not features:
-                    return unavailable(f"Coordinates fall outside a mapped zoning district in {source}", source)
-                attrs = features[0].get("attributes", {})
-                code = _attr(attrs, entry["code_field"])
+                    return "miss"
+                code = _attr(features[0].get("attributes", {}), layer["code_field"])
                 if not code:
-                    return unavailable("Zoning service returned a district feature without a code", source)
-                return live({"district": code, "description": _attr(attrs, entry.get("desc_field")), "category": _attr(attrs, entry.get("general_field")), "as_of": _attr(attrs, entry.get("year_field"))}, source, 0.85)
+                    return "miss"
+                attrs = features[0].get("attributes", {})
+                return {"district": code, "description": _attr(attrs, layer.get("desc_field")), "category": _attr(attrs, layer.get("general_field")), "as_of": _attr(attrs, layer.get("year_field"))}
             if attempt < 2:
                 time.sleep(min(2 ** attempt, 4))
-        raise ProviderError(f"County zoning service is temporarily unavailable ({last_reason})")
+        return "error"
 
 
 class ConfiguredProvider:
