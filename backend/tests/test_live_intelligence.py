@@ -301,10 +301,36 @@ def test_zoning_provider_is_unavailable_outside_supported_markets(monkeypatch) -
     monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
     def _forbidden(*_a, **_k): raise AssertionError("no HTTP call for an unsupported county")
     monkeypatch.setattr(enrichment.HTTP, "get", _forbidden)
-    prop = Property(name="Z", address="1 Rd", city="Catskill", state="NY", county="Greene", latitude=42.2176, longitude=-73.8643)
+    prop = Property(name="Z", address="1 Rd", city="Albany", state="NY", county="Albany", latitude=42.6526, longitude=-73.7562)
     field = enrichment.ZoningProvider().fetch(prop)
     assert field["value"] is None
-    assert "Greene County" in field["missing_reason"]
+    assert "Albany County" in field["missing_reason"]
+
+
+def test_zoning_covers_town_of_catskill_greene(monkeypatch) -> None:
+    """Greene County: the Town/Village of Catskill resolve a real district from the verified
+    consultant-hosted zoning layers."""
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"features": [{"attributes": {"Zone": "Rural Residential/Agriculture"}}]})
+    prop = Property(name="Z", address="1 Rd", city="Catskill", state="NY", county="Greene", latitude=42.23, longitude=-73.90)
+    field = enrichment.ZoningProvider().fetch(prop)
+    assert field["retrieval_status"] == "live"
+    assert field["value"]["district"] == "Rural Residential/Agriculture"
+    assert "Catskill" in field["source"]
+
+
+def test_zoning_is_honest_for_greene_towns_without_gis(monkeypatch) -> None:
+    """A Greene town outside Catskill (every mapped layer misses) falls back to an actionable
+    reason, never a fabricated district."""
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"features": []})
+    prop = Property(name="Z", address="1 Rd", city="Windham", state="NY", county="Greene", latitude=42.297, longitude=-74.257)
+    field = enrichment.ZoningProvider().fetch(prop)
+    assert field["value"] is None
+    assert "Catskill" in field["missing_reason"] and "zoning office" in field["missing_reason"]
 
 
 def test_zoning_covers_a_sullivan_corridor_town(monkeypatch) -> None:

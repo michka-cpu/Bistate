@@ -258,6 +258,18 @@ ZONING_GIS_SOURCES: dict[str, list[dict[str, Any]]] = {
         {"url": f"{_UPDE}/5/query", "name": "NPS Upper Delaware — Town of Lumberland zoning (2016)", "code_field": "Dist_Code", "desc_field": "District_N"},
         {"url": f"{_UPDE}/8/query", "name": "NPS Upper Delaware — Town of Highland zoning (2014)", "code_field": "ZONEID", "desc_field": "ZONENAME", "general_field": "GENZONENAM"},
         {"url": f"{_UPDE}/9/query", "name": "NPS Upper Delaware — Town of Tusten zoning (2013)", "code_field": "ZONEID", "desc_field": "ZONENAME", "general_field": "GENZONENAM"},
+        # Town of Thompson (the Monticello area) — current zoning from the town's 2023
+        # Comprehensive Plan, consultant-hosted. Covers the town EXCEPT the incorporated
+        # Village of Monticello (a hole in the layer). ZONEID only; no description field.
+        {"url": "https://services9.arcgis.com/8b5xUMiat5TOQueD/arcgis/rest/services/Thompson_Comprehensive_Plan_2023_WFL1/FeatureServer/20/query", "name": "Town of Thompson zoning (2023 Comprehensive Plan)", "code_field": "ZONEID"},
+    ],
+    # Greene: no county-wide layer. The Town and Village of Catskill publish verified
+    # adopted zoning polygons (consultant-hosted); every other Greene town is static-map
+    # only. (Windham exists only as a parcel-shaped *draft* map, so it is deliberately
+    # excluded — draft zoning is not presented as adopted law.)
+    "greene": [
+        {"url": "https://services8.arcgis.com/MVX6tbvWftyS3KBR/arcgis/rest/services/Town_of_Catskill_Zoning_Layers/FeatureServer/0/query", "name": "Town of Catskill zoning (official 2013)", "code_field": "Zone"},
+        {"url": "https://services8.arcgis.com/MVX6tbvWftyS3KBR/arcgis/rest/services/Town_of_Catskill_Zoning_Layers/FeatureServer/1/query", "name": "Village of Catskill zoning", "code_field": "ZONING_DIS"},
     ],
 }
 
@@ -266,7 +278,8 @@ ZONING_GIS_SOURCES: dict[str, list[dict[str, Any]]] = {
 # Thompson/Monticello, and for all of Delaware County NY). When a point matches no mapped
 # layer, the card states this honest, actionable reason rather than inventing a district.
 ZONING_NO_PUBLIC_GIS: dict[str, str] = {
-    "sullivan": "This point is outside the six Upper Delaware corridor towns Bistate maps in Sullivan County. The rest of the county — including the Town of Thompson (Monticello) — publishes zoning only as static maps; confirm the district with the town zoning office.",
+    "sullivan": "This point isn't in the Sullivan areas Bistate maps — the six Upper Delaware corridor towns and the Town of Thompson (which excludes the incorporated Village of Monticello). The village and the other interior towns (Liberty, Fallsburg, Bethel…) publish zoning only as static maps; confirm the district with the town zoning office.",
+    "greene": "Outside the Town and Village of Catskill (the only Greene County zoning Bistate maps), Greene towns publish zoning only as static maps or have no zoning; confirm the district with the town zoning office.",
     "delaware": "Delaware County (NY) publishes no public zoning GIS layer, only static town maps. Confirm the district with the town zoning office.",
 }
 
