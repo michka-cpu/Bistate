@@ -266,3 +266,118 @@ def test_demographics_requires_a_free_census_key(monkeypatch) -> None:
     field = enrichment.CensusDemographicsProvider().fetch(prop)
     assert field["value"] is None
     assert "Census API key" in field["missing_reason"]
+
+
+def _ulster_prop() -> Property:
+    return Property(name="Z", address="1 Main St", city="New Paltz", state="NY", county="Ulster", latitude=41.7476, longitude=-74.0868)
+
+
+def test_zoning_provider_returns_the_verified_district_for_a_covered_county(monkeypatch) -> None:
+    """A covered Catskills county (Ulster) resolves a real zoning district from public GIS."""
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"features": [{"attributes": {"ZONE_CODE": "B-2", "ZONE_DESC": "Core Business", "ZONE_GENERAL": "Business", "MUNICIPALI": "VNEWPAL", "YEAR": "2016"}}]})
+    field = enrichment.ZoningProvider().fetch(_ulster_prop())
+    assert field["retrieval_status"] == "live"
+    assert field["value"] == {"district": "B-2", "description": "Core Business", "category": "Business", "as_of": "2016"}
+    assert "Ulster County" in field["source"]
+
+
+def test_zoning_provider_is_honest_when_coordinates_are_unzoned(monkeypatch) -> None:
+    """Inside a covered county but outside any mapped district (e.g. an unzoned city),
+    the provider discloses that rather than inventing a district."""
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"features": []})
+    field = enrichment.ZoningProvider().fetch(_ulster_prop())
+    assert field["value"] is None
+    assert "outside a mapped zoning district" in field["missing_reason"]
+    assert field["source"] is not None
+
+
+def test_zoning_provider_is_unavailable_outside_supported_markets(monkeypatch) -> None:
+    """A county with no mapped public zoning layer yields an honest unavailable — no call."""
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    def _forbidden(*_a, **_k): raise AssertionError("no HTTP call for an unsupported county")
+    monkeypatch.setattr(enrichment.HTTP, "get", _forbidden)
+    prop = Property(name="Z", address="1 Rd", city="Catskill", state="NY", county="Greene", latitude=42.2176, longitude=-73.8643)
+    field = enrichment.ZoningProvider().fetch(prop)
+    assert field["value"] is None
+    assert "Greene County" in field["missing_reason"]
+
+
+def test_zoning_covers_a_sullivan_corridor_town(monkeypatch) -> None:
+    """A Sullivan river-corridor town (e.g. Tusten/Narrowsburg) resolves a real district
+    from the verified NPS Upper Delaware zoning layers."""
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"features": [{"attributes": {"ZONEID": "GR", "ZONENAME": "General Residential", "GENZONENAM": "Residential"}}]})
+    prop = Property(name="Z", address="1 Main St", city="Narrowsburg", state="NY", county="Sullivan", latitude=41.603, longitude=-75.060)
+    field = enrichment.ZoningProvider().fetch(prop)
+    assert field["retrieval_status"] == "live"
+    assert field["value"]["district"] == "GR" and field["value"]["description"] == "General Residential"
+    assert "Upper Delaware" in field["source"]
+
+
+def test_zoning_is_honest_for_monticello_outside_the_corridor_towns(monkeypatch) -> None:
+    """Monticello (Town of Thompson) is not one of the mapped corridor towns; every corridor
+    layer misses and the card falls back to an actionable reason — never a fabricated district."""
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"features": []})
+    monticello = Property(name="Z", address="1 Broadway", city="Monticello", state="NY", county="Sullivan", latitude=41.6556, longitude=-74.6893)
+    field = enrichment.ZoningProvider().fetch(monticello)
+    assert field["value"] is None
+    assert "Monticello" in field["missing_reason"] and "zoning office" in field["missing_reason"]
+
+
+def test_zoning_is_honest_for_delaware_county_with_no_gis(monkeypatch) -> None:
+    """Delaware County NY has no zoning GIS at all — an actionable reason and no network call."""
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    def _forbidden(*_a, **_k): raise AssertionError("no HTTP call when there is no GIS source")
+    monkeypatch.setattr(enrichment.HTTP, "get", _forbidden)
+    delhi = Property(name="Z", address="1 Main St", city="Delhi", state="NY", county="Delaware", latitude=42.2784, longitude=-74.9160)
+    field = enrichment.ZoningProvider().fetch(delhi)
+    assert field["value"] is None and "Delaware County" in field["missing_reason"]
+
+
+def test_zoning_raises_when_every_layer_fails_transiently(monkeypatch) -> None:
+    """If all of a county's layers error out (no clean answer), the provider raises so a prior
+    live fact is retained rather than overwritten with a false 'no zoning'."""
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(enrichment.HTTP, "get", lambda *_a, **_k: {"error": {"code": 500}})
+    prop = Property(name="Z", address="1 Main St", city="Narrowsburg", state="NY", county="Sullivan", latitude=41.603, longitude=-75.060)
+    try:
+        enrichment.ZoningProvider().fetch(prop)
+        assert False, "expected ProviderError"
+    except enrichment.ProviderError:
+        pass
+
+
+def test_zoning_provider_requires_coordinates(monkeypatch) -> None:
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    prop = Property(name="Z", address="1 Main St", city="New Paltz", state="NY", county="Ulster")
+    field = enrichment.ZoningProvider().fetch(prop)
+    assert field["value"] is None
+    assert "Latitude and longitude" in field["missing_reason"]
+
+
+def test_zoning_provider_retries_a_transient_error_then_succeeds(monkeypatch) -> None:
+    from app.services import enrichment
+    monkeypatch.setattr(enrichment.get_settings(), "live_providers_enabled", True)
+    monkeypatch.setattr(enrichment.time, "sleep", lambda *_: None)
+    calls = {"n": 0}
+    def flaky(*_a, **_k):
+        calls["n"] += 1
+        if calls["n"] == 1: return {"error": {"code": 500}}
+        return {"features": [{"attributes": {"ZONE_CODE": "HC", "ZONE_DESC": "Hamlet Commercial", "ZONE_GENERAL": "Mixed Use", "YEAR": "2015"}}]}
+    monkeypatch.setattr(enrichment.HTTP, "get", flaky)
+    field = enrichment.ZoningProvider().fetch(_ulster_prop())
+    assert calls["n"] == 2
+    assert field["value"]["district"] == "HC"

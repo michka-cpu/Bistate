@@ -57,7 +57,7 @@ SECTIONS: dict[str, list[tuple[str, str, str]]] = {
         ("assessment_history", "Assessment history", "manual"),
     ],
     "Regulatory": [
-        ("zoning", "Zoning", "keyed"),
+        ("zoning", "Zoning", "auto"),
         ("str_regulations", "STR rules", "keyed"),
         ("event_restrictions", "Wedding / event restrictions", "manual"),
         ("permits", "Permits requiring review", "manual"),

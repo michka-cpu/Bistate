@@ -94,7 +94,7 @@ export default function SearchPage({ onOpenPipeline, onOpenProperty }: { onOpenP
       </section>
 
       <section className="discover-section">
-        <div className="discover-heading"><h2>Discover properties</h2><p>Browse candidates from Zillow, Realtor, Redfin, and LandWatch by criteria.</p></div>
+        <div className="discover-heading"><h2>Discover properties</h2><p>Sample candidates across the target Catskills markets (Sullivan, Delaware, Ulster). Illustrative until a licensed listing feed is connected — not live inventory.</p></div>
         <form className="filter-panel" onSubmit={search}>
           {([['county', 'County'], ['town', 'Town'], ['postal_code', 'ZIP code'], ['min_price', 'Min price'], ['max_price', 'Max price'], ['min_acreage', 'Min acreage'], ['bedrooms', 'Bedrooms']] as Array<[keyof Filters, string]>).map(([key, label]) => (
             <label key={key}>{label}<input aria-label={label} type={key.includes('price') || key === 'min_acreage' || key === 'bedrooms' ? 'number' : 'text'} value={filters[key]} onChange={(e) => set(key, e.target.value)} /></label>

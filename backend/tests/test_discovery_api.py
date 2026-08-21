@@ -1,5 +1,21 @@
+def test_search_includes_monticello_and_catskills_markets(client):
+    # Monticello (Sullivan County) is a required target market; each source lists it.
+    listings = client.post('/api/discovery/search', json={'town': 'Monticello'}).json()
+    assert {item['listing_source'] for item in listings} == {'Zillow', 'Realtor', 'Redfin', 'LandWatch'}
+    assert {item['city'] for item in listings} == {'Monticello'}
+    assert all(item['county'] == 'Sullivan' for item in listings)
+    assert client.get('/api/properties').json() == []
+
+
+def test_search_covers_the_catskills_counties(client):
+    for county in ('Sullivan', 'Delaware', 'Ulster'):
+        found = client.post('/api/discovery/search', json={'county': county}).json()
+        assert found, f'expected sample listings for {county} County'
+        assert all(item['county'] == county for item in found)
+
+
 def test_search_persists_separate_discovered_listings(client):
-    response = client.post('/api/discovery/search', json={'county': 'Columbia', 'min_price': 400000, 'bedrooms': 3})
+    response = client.post('/api/discovery/search', json={'county': 'Sullivan', 'min_price': 400000, 'bedrooms': 3})
     assert response.status_code == 200
     listings = response.json()
     assert {item['listing_source'] for item in listings} == {'Zillow', 'Realtor', 'Redfin', 'LandWatch'}
@@ -7,22 +23,23 @@ def test_search_persists_separate_discovered_listings(client):
 
 
 def test_search_returns_only_listings_matching_the_submitted_filters(client):
-    # Seed the persistent listings table with a broad search.
-    assert len(client.post('/api/discovery/search', json={}).json()) == 4
+    # Seed the persistent listings table with a broad search: four sources x N markets.
+    seeded = client.post('/api/discovery/search', json={}).json()
+    assert len(seeded) > 4
 
     # A filter that matches no sample listing must return an empty result, not the whole table.
     assert client.post('/api/discovery/search', json={'county': 'Nowhere'}).json() == []
     assert client.post('/api/discovery/search', json={'town': 'Albany'}).json() == []
-    assert client.post('/api/discovery/search', json={'property_type': 'Land'}).json() == []
-    assert client.post('/api/discovery/search', json={'bedrooms': 5}).json() == []
+    assert client.post('/api/discovery/search', json={'bedrooms': 9}).json() == []
     assert client.post('/api/discovery/search', json={'postal_code': '99999'}).json() == []
 
-    # Sample listings are priced 475k/500k/525k/550k; a max_price bound trims the set.
-    capped = client.post('/api/discovery/search', json={'max_price': 480000}).json()
-    assert [item['asking_price'] for item in capped] == [475000]
+    # Land parcels are present and isolable by the property-type filter.
+    land = client.post('/api/discovery/search', json={'property_type': 'Land'}).json()
+    assert land and {item['property_type'] for item in land} == {'Land'}
 
-    floored = client.post('/api/discovery/search', json={'min_price': 520000}).json()
-    assert sorted(item['asking_price'] for item in floored) == [525000, 550000]
+    # A max_price bound trims the set to only the cheaper listings.
+    capped = client.post('/api/discovery/search', json={'max_price': 320000}).json()
+    assert capped and all(item['asking_price'] <= 320000 for item in capped)
 
 
 def test_watchlist_and_analyze_imports_discovery_listing(client):
